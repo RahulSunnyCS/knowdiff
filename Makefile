@@ -40,7 +40,7 @@ ifneq ($(strip $(LIMIT_RATE)),)
 NET_FLAGS += --limit-rate $(LIMIT_RATE)
 endif
 
-EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS) $(NET_FLAGS)
+EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS) --playlist-name $(PLAYLIST_NAME) $(NET_FLAGS)
 ifneq ($(strip $(VIDEOS)),)
 EXTRACT_FLAGS += --videos "$(VIDEOS)"
 endif
@@ -105,7 +105,7 @@ scope:
 	python3 scripts/scope_init.py --playlist $(PLAYLIST_NAME)
 
 test1:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT) $(NET_FLAGS)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT) --playlist-name $(PLAYLIST_NAME) $(NET_FLAGS)
 
 # Only forward a variable to the interactive front-end if the user
 # actually set it (command line or environment) — Makefile defaults

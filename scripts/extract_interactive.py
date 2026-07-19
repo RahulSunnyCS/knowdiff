@@ -146,6 +146,7 @@ def main() -> int:
         "--mode", mode,
         "--out", out,
         "--jobs", str(jobs),
+        "--playlist-name", playlist_name or "playlist",
     ]
     if videos:
         cmd += ["--videos", videos]

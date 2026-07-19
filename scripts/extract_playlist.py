@@ -632,6 +632,11 @@ def main():
                         "screen-heavy or --force-whisper, keep at 1 unless "
                         "you have spare CPU. Default: 1.")
     p.add_argument("--out", default="output")
+    p.add_argument("--playlist-name", default=None,
+                   help="Output subfolder name under --out. Defaults to the "
+                        "local file's stem (--local) or 'playlist' (URL "
+                        "source). Set this to match the PLAYLIST_NAME you'll "
+                        "use in later phases (preprocess, phase2, etc).")
     p.add_argument("--min-caption-words", type=int, default=100,
                    help="If YouTube captions produce fewer than this many words, "
                         "fall back to Whisper. Set to 0 to always trust captions.")
@@ -706,7 +711,8 @@ def main():
         sys.exit(1)
 
     playlist_name = slugify(
-        Path(args.source).stem if args.local else "playlist"
+        args.playlist_name if args.playlist_name
+        else (Path(args.source).stem if args.local else "playlist")
     )
     root = Path(args.out) / playlist_name
     root.mkdir(parents=True, exist_ok=True)
