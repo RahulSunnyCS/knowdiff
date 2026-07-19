@@ -5,6 +5,59 @@ See bottom for what remains.
 
 ---
 
+## Roadmap — knowledge-reuse features (2 → 3 → 4)
+
+A compounding progression on top of the existing extract/distill assets:
+**retrieval → personalization → agentic planning**. Full evaluation and
+rationale live in the approved plan. Build order and status below.
+
+### ▶ Phase 1 (in progress): RAG Q&A over a playlist + eval
+
+Ask questions about an indexed playlist; answers are grounded in the
+transcripts with `[video_NN @ MM:SS]` citations and fall back to general
+knowledge only when clearly labelled.
+
+- [ ] `scripts/embeddings.py` — `Embedder` gateway. Providers: `hash`
+      (zero-dep baseline/testing), `local` (fastembed / sentence-transformers,
+      **default**), `voyage` (API, primary), `openai` (API, alternate).
+      Config-only switch via `scope.json:embeddings`.
+- [ ] `scripts/rag_index.py` — chunk over `transcript.timestamped.json`
+      segments (precise timestamps), embed, persist `rag_index.npz` +
+      `rag_index.meta.json` + `chunks.jsonl` under `distilled/<pl>/`.
+- [ ] `scripts/rag_ask.py` — cosine top-k retrieval, `--retrieve-only`
+      offline inspection, grounded answer via `prompts/06_rag_answer.md`,
+      cost recorded to `cost.json`.
+- [ ] `scripts/rag_eval.py` + `prompts/07_rag_eval.md` — LLM-judged
+      faithfulness / answer-relevance / context-relevance → `rag_score.json`.
+- [ ] `qa` intent + `embeddings` config in `scope.json`; `make index` /
+      `make ask` / `make rag-eval`; optional deps; README section + intents row.
+
+### Phase 2 (queued): second-brain recommender
+
+Cron over watch history → model the user's knowledge state → for a new video,
+recommend watch / skip / watch-only-[MM:SS–MM:SS] based on novelty vs. what
+they already know. Builds directly on the Phase 1 retrieval index. Watch
+history ingested via Google Takeout export.
+
+### Phase 3 (queued): syllabus-maker capstone
+
+Topic → research current syllabi (web) → build a market-relevant syllabus →
+match YouTube transcripts/timestamps to objectives → assemble a free
+"bootcamp-level" curriculum with gap analysis. Agentic planning + RAG.
+
+### Add-on B (optional, bridges 1→3): concept graph / graph-RAG
+
+Extract concepts + prerequisite edges across a playlist; powers better
+retrieval and becomes the prerequisite backbone for the syllabus maker.
+
+### Side-quest (decoupled): grocery MCP-authoring exercise
+
+Author an MCP server (recipe → scaled ingredient list → cart) against a
+**mocked** grocery backend. Purpose is learning MCP authoring only — no
+official Blinkit/Zepto/Instamart API exists, so do not build against a real one.
+
+---
+
 ## Shipped
 
 ### ✓ 1. Phase 0 interactive scoping CLI

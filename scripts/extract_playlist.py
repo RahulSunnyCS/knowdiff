@@ -96,6 +96,42 @@ def run(cmd: list, capture=True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=capture, text=True)
 
 
+# ── Network / rate-limit options ──────────────────────────────────────────────
+# Populated once in main() from CLI flags, then read by every yt-dlp call site
+# and the caption fetcher. This is how we stop looking like an anonymous bot to
+# YouTube (the usual cause of 429 / "confirm you're not a bot" limits).
+_NET_FLAGS: list[str] = []
+_PROXY: str | None = None
+
+
+def _build_net_flags(args) -> list[str]:
+    """Translate the CLI rate-limit flags into a yt-dlp argument list."""
+    flags: list[str] = []
+    if args.cookies_from_browser:
+        flags += ["--cookies-from-browser", args.cookies_from_browser]
+    if args.cookies:
+        flags += ["--cookies", args.cookies]
+    if args.proxy:
+        flags += ["--proxy", args.proxy]
+    if args.sleep_requests is not None:
+        flags += ["--sleep-requests", str(args.sleep_requests)]
+    if args.sleep_interval is not None:
+        flags += ["--sleep-interval", str(args.sleep_interval)]
+    if args.max_sleep_interval is not None:
+        flags += ["--max-sleep-interval", str(args.max_sleep_interval)]
+    if args.retries is not None:
+        flags += ["--retries", str(args.retries),
+                  "--extractor-retries", str(args.retries)]
+    if args.limit_rate:
+        flags += ["--limit-rate", args.limit_rate]
+    return flags
+
+
+def ytdlp(*args) -> list[str]:
+    """Build a yt-dlp command with the shared network/rate-limit flags applied."""
+    return ["yt-dlp", *_NET_FLAGS, *args]
+
+
 def parse_video_selection(spec: str) -> list[int]:
     """Parse '10-25', '1,3,5-7', '5' into a sorted list of 1-based indices.
 
@@ -138,7 +174,7 @@ def enumerate_videos(
     require("yt-dlp")
     step("Enumerating playlist via yt-dlp...")
     # --flat-playlist is fast: metadata only, no download
-    res = run(["yt-dlp", "--flat-playlist", "--dump-json", source])
+    res = run(ytdlp("--flat-playlist", "--dump-json", source))
     if res.returncode != 0:
         err(f"yt-dlp failed:\n{res.stderr.strip()[:400]}")
         sys.exit(1)
@@ -191,7 +227,19 @@ def _fetch_captions(video_id: str) -> tuple[str, list[dict], str] | None:
     `segments` is a list of {"start": float, "end": float, "text": str}.
     """
     from youtube_transcript_api import YouTubeTranscriptApi
-    api = YouTubeTranscriptApi()
+    # Route caption fetches through the proxy too, when configured — the
+    # caption API gets IP-blocked independently of yt-dlp.
+    api = None
+    if _PROXY:
+        try:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            api = YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(http_url=_PROXY, https_url=_PROXY)
+            )
+        except Exception:
+            api = None  # older library without proxy support; fall through
+    if api is None:
+        api = YouTubeTranscriptApi()
 
     fetched = None
     language = "unknown"
@@ -264,7 +312,7 @@ def _save_description(video: dict, vdir: Path) -> None:
     if target.exists():
         return
     url = video.get("url") or f"https://www.youtube.com/watch?v={video['id']}"
-    res = run(["yt-dlp", "--skip-download", "--get-description", url])
+    res = run(ytdlp("--skip-download", "--get-description", url))
     if res.returncode == 0 and res.stdout.strip():
         try:
             target.write_text(res.stdout, encoding="utf-8")
@@ -428,8 +476,8 @@ def get_transcript(
         require("yt-dlp")
         step("Downloading audio for Whisper...")
         audio_out = str(vdir / "audio.%(ext)s")
-        res = run(["yt-dlp", "-x", "--audio-format", "wav",
-                   "-o", audio_out, video["url"]])
+        res = run(ytdlp("-x", "--audio-format", "wav",
+                        "-o", audio_out, video["url"]))
         if res.returncode != 0:
             err("Audio download failed.")
             return False
@@ -584,6 +632,11 @@ def main():
                         "screen-heavy or --force-whisper, keep at 1 unless "
                         "you have spare CPU. Default: 1.")
     p.add_argument("--out", default="output")
+    p.add_argument("--playlist-name", default=None,
+                   help="Output subfolder name under --out. Defaults to the "
+                        "local file's stem (--local) or 'playlist' (URL "
+                        "source). Set this to match the PLAYLIST_NAME you'll "
+                        "use in later phases (preprocess, phase2, etc).")
     p.add_argument("--min-caption-words", type=int, default=100,
                    help="If YouTube captions produce fewer than this many words, "
                         "fall back to Whisper. Set to 0 to always trust captions.")
@@ -594,7 +647,48 @@ def main():
                         "(e.g. 'en'). If omitted, the backend auto-detects.")
     p.add_argument("--no-description", action="store_true",
                    help="Skip writing description.txt per video.")
+
+    net = p.add_argument_group(
+        "network / rate-limit",
+        "Options for getting past YouTube 429 / 'confirm you're not a bot' "
+        "limits. Cookies make requests look logged-in; sleep/retries throttle "
+        "and ride out transient blocks.",
+    )
+    net.add_argument("--cookies-from-browser", default=None,
+                     metavar="BROWSER",
+                     help="Load cookies from a local browser profile "
+                          "(chrome, firefox, edge, brave, safari, ...). "
+                          "The single most effective fix for bot checks.")
+    net.add_argument("--cookies", default=None, metavar="FILE",
+                     help="Path to a Netscape-format cookies.txt (alternative "
+                          "to --cookies-from-browser).")
+    net.add_argument("--proxy", default=None, metavar="URL",
+                     help="Proxy URL (e.g. http://user:pass@host:port) applied "
+                          "to yt-dlp AND the caption fetcher, to rotate off a "
+                          "blocked IP.")
+    net.add_argument("--sleep-requests", type=float, default=None,
+                     metavar="SEC",
+                     help="Seconds to sleep between requests (yt-dlp). "
+                          "Try 1-2 when you keep hitting 429s.")
+    net.add_argument("--sleep-interval", type=float, default=None,
+                     metavar="SEC",
+                     help="Minimum seconds to sleep before each download.")
+    net.add_argument("--max-sleep-interval", type=float, default=None,
+                     metavar="SEC",
+                     help="Upper bound for randomized download sleep "
+                          "(pairs with --sleep-interval).")
+    net.add_argument("--retries", type=int, default=10, metavar="N",
+                     help="Retries for both downloads and extraction. "
+                          "Default 10; pure upside on transient 429s.")
+    net.add_argument("--limit-rate", default=None, metavar="RATE",
+                     help="Cap download bandwidth (e.g. 2M, 500K) — looks less "
+                          "bot-like than maxing the pipe.")
     args = p.parse_args()
+
+    # Publish network options for every yt-dlp call site + the caption fetcher.
+    global _NET_FLAGS, _PROXY
+    _NET_FLAGS = _build_net_flags(args)
+    _PROXY = args.proxy
 
     say(f"\n{C['bold']}{C['cyan']}━━━ Local Playlist Extractor ━━━{C['reset']}")
     say(f"{C['dim']}Mode: {args.mode}  |  Source: {args.source}{C['reset']}\n")
@@ -617,7 +711,8 @@ def main():
         sys.exit(1)
 
     playlist_name = slugify(
-        Path(args.source).stem if args.local else "playlist"
+        args.playlist_name if args.playlist_name
+        else (Path(args.source).stem if args.local else "playlist")
     )
     root = Path(args.out) / playlist_name
     root.mkdir(parents=True, exist_ok=True)
@@ -649,8 +744,8 @@ def main():
                 if has("yt-dlp"):
                     step("Downloading video for frame extraction...")
                     out_tmpl = str(vdir / "video.%(ext)s")
-                    run(["yt-dlp", "-f", "worst[ext=mp4]/worst",
-                         "-o", out_tmpl, v["url"]])
+                    run(ytdlp("-f", "worst[ext=mp4]/worst",
+                              "-o", out_tmpl, v["url"]))
                     cand = list(vdir.glob("video.*"))
                     media = str(cand[0]) if cand else None
             if media and Path(media).exists():

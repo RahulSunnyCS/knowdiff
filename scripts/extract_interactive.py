@@ -146,9 +146,27 @@ def main() -> int:
         "--mode", mode,
         "--out", out,
         "--jobs", str(jobs),
+        "--playlist-name", playlist_name or "playlist",
     ]
     if videos:
         cmd += ["--videos", videos]
+
+    # Forward network / rate-limit knobs from the environment (set via
+    # `make extract COOKIES_FROM=chrome SLEEP=2 ...`) so the interactive path
+    # can get past YouTube 429 / bot-check limits too.
+    for env_key, flag in (
+        ("COOKIES_FROM", "--cookies-from-browser"),
+        ("COOKIES", "--cookies"),
+        ("PROXY", "--proxy"),
+        ("SLEEP", "--sleep-requests"),
+        ("SLEEP_MIN", "--sleep-interval"),
+        ("SLEEP_MAX", "--max-sleep-interval"),
+        ("RETRIES", "--retries"),
+        ("LIMIT_RATE", "--limit-rate"),
+    ):
+        val = env.get(env_key, "").strip()
+        if val:
+            cmd += [flag, val]
 
     print()
     print("Running:", " ".join(shlex.quote(c) for c in cmd))

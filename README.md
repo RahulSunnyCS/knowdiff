@@ -1,246 +1,239 @@
 # youtube-skill-fetch
 
-**Turn a YouTube creator's playlist into something you can re-use.**
+**Turn a YouTube creator's playlist into a reusable asset — a Claude Skill,
+a research report, a summary, or a set of cited quotes.**
 
-You give it a playlist. It watches the videos for you (locally, on your own
-computer), then asks Claude to figure out the patterns — and gives you back
-one of:
-
-- a **Skill** Claude can load to think the way that creator does, or
-- a **report (PDF)** answering a specific question like *"what does this
-  person think about commodities?"* or *"how is this person learning AI?"*, or
-- a **summary**, **word/topic stats**, or **a list of quotes** on a theme.
-
-You decide which one you want. The downloads, transcripts, and OCR run on
-your machine for free. Only the *thinking* steps use Claude.
+You point it at a playlist. It watches the videos for you (locally, on your
+own machine — free), then asks Claude to find the patterns and hands you back
+something you can actually re-use.
 
 ---
 
-## Is this for me?
+## Part 1 — What this project does (the business view)
 
-You might find this useful if:
+### The problem it solves
 
-- You follow a YouTube creator and wish you could **ask Claude questions
-  in their style** without manually re-watching everything.
-- You want a **PDF report** of one creator's views on a specific topic,
-  with citations back to the exact video and timestamp.
-- You're a researcher or learner and you want to **stop re-watching the
-  same recurring ideas** spread across 30 videos.
-- You make videos yourself and want a Skill that helps you **work in
-  your own established style**.
+Creators pack real expertise into long-form video, but that knowledge is
+locked inside hours of audio and slides. If you want to *work in a creator's
+style* — write like them, decide like them, or just find what they said about
+one topic — your only option today is to re-watch everything and take notes by
+hand. That's slow, inconsistent, and doesn't scale past a handful of videos.
 
-You probably **don't** need this if:
+Feeding raw transcripts to an AI at question-time doesn't fix it either: it's
+expensive, and it loses the cross-video patterns that make a creator's approach
+distinctive.
 
-- You only watch one or two videos casually. Just watch them.
-- You want to download videos to keep or republish. This tool is **not**
-  a content downloader — the raw transcripts stay on your machine and are
-  not meant to be shared.
+### What it produces
 
----
+You choose the shape of the output **before** the run starts. Six options:
 
-## ⚠️ Read this before you use it
+| Choose this           | When you want…                                                          | You get                     |
+| --------------------- | ----------------------------------------------------------------------- | --------------------------- |
+| `method-distillation` | A Skill that thinks like the creator                                    | `SKILL.md`                  |
+| `topical-report`      | A PDF answering "what does X think about Y?"                            | `report.md` + `report.pdf`  |
+| `summary`             | A short summary of every video + the whole playlist                     | `summary.md`                |
+| `stats`               | How often a creator says a word / mentions a topic (no Claude cost)     | `stats.json` / `stats.md`   |
+| `quote-mining`        | A list of verbatim quotes matching themes you specify (no Claude cost)  | `quotes.md`                 |
+| `style-clone`         | A Skill that mimics the creator's *phrasing*, not just their method      | `SKILL.md`                  |
+| `qa` (RAG)            | To **ask questions** and get answers grounded in the playlist            | cited answers + `rag_score.json` |
 
-This is a tool, not a service. **You** are responsible for what you point
-it at. Some plain-English rules:
+Every output (except `stats`) also produces a `citations.md` sidecar mapping
+each claim back to **the exact video and timestamp** it came from. The Skill or
+report stays clean and readable; open the citations file when you want to
+verify a point.
 
-- **Only use it on content you have the right to use.** That means: your
-  own videos, Creative Commons / openly-licensed content (lots of
-  conference talks fall here), or content the creator has explicitly
-  permitted you to use.
-- **Don't share what comes out.** Transcripts and downloaded audio stay
-  on your computer. The repo's `.gitignore` already keeps them out of
-  Git, but don't email them around or upload them either.
-- **Credit the creator.** If you do produce a Skill or report, name the
-  creator and link the playlist.
-- **This is not for commercial repackaging.** Don't sell what this
-  produces. The project is open source, free, and meant for personal /
-  research use only.
-- **No warranty.** It's free software under the Apache-2.0 license.
-  We accept no liability if you misuse it.
+### Who it's for
 
-If you're a creator and you want your content out of someone's local
-copy of this tool, contact that person directly — the project itself
-doesn't host any content, so there's nothing for us to take down.
+- **Practitioners** who want to draft work in a respected creator's method.
+- **Learners** who want their own drafts critiqued the way that creator would.
+- **Operators** who want a "what would X do here?" oracle while deciding.
+- **Researchers** tired of re-watching the same recurring ideas across 30 videos.
+- **Creators** who want a Skill that helps them keep working in their own style.
 
-Full compliance notes are in [`docs/PRD.md`](docs/PRD.md) §12.
+You probably **don't** need this if you only watch a video or two casually, or
+if what you actually want is to download videos to keep or republish — this is
+**not** a content downloader.
 
----
+### What it costs
 
-## How it works (for non-technical readers)
+The mechanical work — downloading, transcribing, OCR, stats, quote-mining —
+runs **locally and free** on your own machine. Only the *thinking* steps call
+Claude, and the tool always **shows you an estimate and asks you to confirm**
+before it spends anything.
 
-Imagine doing this by hand:
+Rough Claude cost for a **10-hour playlist** (~40 × 15-min videos):
 
-1. **Download captions** for every video in the playlist (or transcribe
-   them if captions aren't there). This is the boring mechanical part —
-   it runs locally and is free.
-2. **For each video, take notes** on the key ideas. We ask Claude to do
-   this, producing one JSON file per video.
-3. **Look across all the notes** and pull out the patterns that come up
-   again and again. Claude does this once, across everything.
-4. **Write up the final output** — either a Skill, a topical report (PDF),
-   a summary, or stats. You pick the shape upfront.
+| Model      | Approx. cost per playlist |
+| ---------- | ------------------------- |
+| Sonnet 4.6 | ~$1.50–2.00               |
+| Opus 4.7   | ~$6–8                     |
 
-Every step writes a file you can open in a text editor and read. Nothing
-is hidden. If something looks wrong, you can stop and fix it.
+`stats` and `quote-mining` are **$0** (no Claude). Summaries and reports are
+cheaper than a full distillation because they do less work. Full cost model:
+[`docs/PRD.md`](docs/PRD.md) §8.
 
----
+### How it's distributed
 
-## Outputs you can ask for
+Open-source **source code on GitHub** under Apache-2.0. There is no hosted
+service, paid tier, or SaaS — you clone the repo and run it locally against
+playlists you're entitled to use.
 
-You tell the tool what you want before it starts. Options:
+### ⚠️ Before you use it — your responsibility
 
-| Choose this           | When you want…                                                         | You get                          |
-| --------------------- | ---------------------------------------------------------------------- | -------------------------------- |
-| `method-distillation` | A Skill that thinks like the creator                                    | `SKILL.md`                       |
-| `topical-report`      | A PDF answering "what does X think about Y?"                            | `report.md` + `report.pdf`       |
-| `summary`             | A short summary of every video + the whole playlist                     | `summary.md`                     |
-| `stats`               | How often a creator says a word, mentions a topic, etc. (no Claude cost) | `stats.json` / `stats.md`        |
-| `quote-mining`        | A list of verbatim quotes matching themes you specify                   | `quotes.md`                      |
-| `style-clone`         | A Skill that mimics the creator's *phrasing*, not just method           | `SKILL.md`                       |
+This is a tool, not a service. **You** are responsible for what you point it at:
 
-Every output (except `stats`) also produces a separate `citations.md`
-file mapping each claim back to **the exact video and timestamp** it
-came from. The Skill or report stays clean and readable; if you want
-to verify a specific point, open the citations file.
+- **Only use it on content you have the right to use** — your own videos,
+  Creative Commons / openly-licensed content, or content the creator has
+  explicitly permitted.
+- **Don't share the raw output.** Transcripts and downloaded audio stay on your
+  computer; `.gitignore` keeps them out of Git. Don't email or upload them.
+- **Credit the creator.** If you produce a Skill or report, name the creator and
+  link the playlist.
+- **Not for commercial repackaging.** Don't sell what this produces. It's for
+  personal / research use.
+- **No warranty.** Free software under Apache-2.0; no liability for misuse.
 
----
-
-## What does it cost?
-
-The downloading part is **free** — it just uses your computer.
-
-Claude charges by tokens (think: words it reads and writes). Rough
-estimates for a **10-hour playlist** (about 40 videos × 15 minutes):
-
-| Model         | Approximate cost per playlist |
-| ------------- | ----------------------------- |
-| Sonnet 4.6    | ~$1.50–2.00                   |
-| Opus 4.7      | ~$6–8                         |
-
-`stats` mode is free (no Claude calls). Other modes are cheaper than
-the table above because they do less work.
-
-The tool always **shows you the estimate and asks you to confirm**
-before it starts spending. No surprises.
-
-Full cost model: [`docs/PRD.md`](docs/PRD.md) §8.
+Full compliance notes: [`docs/PRD.md`](docs/PRD.md) §12.
 
 ---
 
-## How to set it up
+## Part 2 — How to implement it (step by step)
 
-**On Mac:**
+The pipeline runs in phases. The **local** phases (extract, preprocess,
+screenshots, stats, quotes) are free and need no API key. The **Claude** phases
+(distill → synthesize → author) are where the value is produced.
 
 ```
+Phase 0   scope        pick the intent + models          (local, interactive)
+Phase 1   extract      download captions / transcribe     (local, free)
+   ↓      preprocess   strip filler, sponsors, repeats    (local, free)
+Phase 2   distill      per-video notes                    (Claude)
+Phase 3   synthesize   patterns across all videos ← review gate (Claude)
+Phase 4   author       write SKILL.md / report            (Claude)
+```
+
+Every step writes a plain file you can open and read. Nothing is hidden; if
+something looks wrong, stop and fix it before paying for the next step.
+
+### Step 0 — Install the dependencies
+
+**macOS:**
+
+```bash
 brew install yt-dlp ffmpeg tesseract
 pip install -r requirements.txt
 ```
 
-**On Linux:**
+**Linux:**
 
-```
+```bash
 sudo apt install yt-dlp ffmpeg tesseract-ocr
 pip install -r requirements.txt
 ```
 
-If a video has no captions, the tool will transcribe it with Whisper.
-Whisper is optional and installed separately. We prefer **faster-whisper**
-(same model weights, ~4× faster, half the memory):
+**If a video has no captions,** the tool transcribes it with Whisper. Install
+it separately — `faster-whisper` is preferred (same weights, ~4× faster, half
+the memory, and voice-activity detection on by default, which avoids Whisper's
+"hallucinate on silence" failure on long videos):
 
-```
+```bash
 pip install faster-whisper      # recommended
 # or, as a fallback:
 pip install openai-whisper
 ```
 
-faster-whisper also enables voice-activity detection by default, which
-dramatically reduces the "hallucination on silence" failure mode of
-Whisper on long videos with pauses.
+On Apple Silicon, `mlx-whisper` is auto-preferred when installed.
 
-On Apple Silicon Macs, `mlx-whisper` is another fast option (not yet
-wired in — see `todo.md`).
+### Step 1 — Choose how you'll drive the Claude phases
 
-If you want the programmatic workflow (recommended — automates Phases
-2–4 instead of copy-pasting prompts), also install:
+There are two paths for Phases 2–4. The local phases are identical on both.
 
-```
-pip install anthropic
-export ANTHROPIC_API_KEY=sk-...
-```
+| Path                            | Setup                                                        | When to use                                                     |
+| ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------- |
+| **A. API key** (automated)      | `pip install anthropic && export ANTHROPIC_API_KEY=sk-...`  | Run the pipeline end-to-end, one command per phase.            |
+| **B. Claude Code / Claude Pro** | Paste prompts from `prompts/` into Claude Code or claude.ai | You already pay for Pro/Max and want zero per-token spend.     |
 
----
+Steps 2–4 below use **Path A**. Path B is covered at the end of this section.
 
-## How to run it
+### Step 2 — Sanity-check one video
 
-There are two ways to drive the Claude steps (Phases 2–4):
-
-| Path                          | How                                                          | When to use                                                              |
-| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| **A. API key** (automated)    | `pip install anthropic && export ANTHROPIC_API_KEY=sk-...`   | You want the pipeline to run end-to-end with one command per phase.      |
-| **B. Claude Code / Claude Pro** | Paste the prompts from `prompts/` into Claude Code or claude.ai | You already pay for a Pro/Max subscription and want zero per-token spend. |
-
-Local steps (extract, preprocess, screenshots, stats, quote-mine) are
-the same on both paths and never need an API key.
-
-The examples below walk through the full flow on Path A. The section
-**"Path B — running it without an API key"** further down shows the
-exact equivalent using Claude Code or claude.ai.
-
-### Example A — Build a Skill that thinks like a creator (API key)
-
-**Scenario:** You follow a creator who runs a CC-licensed conference talk
-playlist. You want a Claude Skill that gives advice in their style.
-
-**Step 1: sanity-check one video.**
-
-```
+```bash
 make test1 PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=mycreator
 ```
 
-This downloads one video's captions to
-`output/mycreator/video_01_*/transcript.txt`. Open it and skim — make
-sure it looks like real text from the talk.
+Downloads one video's captions to `output/mycreator/video_01_*/transcript.txt`.
+Open it and skim — confirm it's real text from the talk before running the lot.
 
-**Step 2: extract the full playlist.**
+### Step 3 — Extract the full playlist
 
-```
+```bash
 make extract PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=mycreator
 ```
 
-When this finishes you'll have 40-ish `transcript.txt` files under
-`output/mycreator/`.
+You'll end up with ~40 `transcript.txt` files under `output/mycreator/`.
+`make extract` is interactive (prompts for URL, range, jobs); use
+`make extract-batch` for a non-interactive run.
 
-Only want a slice? Use `VIDEOS=` for a range (1-based playlist order):
+Only want a slice, or want it faster?
 
-```
-make extract PLAYLIST="..." VIDEOS="1-10"        # first ten
-make extract PLAYLIST="..." VIDEOS="10-25"       # videos 10 through 25
-make extract PLAYLIST="..." VIDEOS="1,3,5-7"     # cherry-pick
-```
-
-Want it faster? Add `JOBS=N` to process videos in parallel. Safe with
-the captions-first path (IO-bound). Keep `JOBS=1` for `--force-whisper`
-or `MODE=screen-heavy` unless you have spare CPU:
-
-```
-make extract PLAYLIST="..." JOBS=4
+```bash
+make extract-batch PLAYLIST="..." VIDEOS="1-10"      # first ten (1-based)
+make extract-batch PLAYLIST="..." VIDEOS="1,3,5-7"   # cherry-pick
+make extract-batch PLAYLIST="..." JOBS=4             # 4 videos in parallel
 ```
 
-**Step 3: clean the transcripts.** This strips filler ("um", "you
-know"), sponsor reads, intros/outros, and repeats. It runs locally and
-typically removes ~30–50% of the text *before* anything goes to Claude,
-which saves you ~30–50% on the next step's cost.
+`JOBS>1` is safe on the captions-first path (IO-bound). Keep `JOBS=1` for
+`--force-whisper` or `MODE=screen-heavy` unless you have spare CPU.
 
-```
+#### Hitting a download / rate limit? (`429`, "confirm you're not a bot")
+
+YouTube throttles anonymous, high-rate access. If extraction starts failing
+with `HTTP Error 429`, a bot-check prompt, or captions coming back empty on
+videos that clearly have them, work through these in order:
+
+1. **Update yt-dlp** — `pip install -U yt-dlp` (or `brew upgrade yt-dlp`).
+   An outdated yt-dlp is the most common cause of sudden "limit" errors.
+2. **Go serial** — drop `JOBS` back to `1`; parallelism is the fastest way to
+   get flagged.
+3. **Authenticate with cookies** — the single most effective fix for bot
+   checks. Pass a browser you're logged into YouTube on:
+   ```bash
+   make extract-batch PLAYLIST="..." PLAYLIST_NAME=mycreator COOKIES_FROM=chrome
+   ```
+   (or `COOKIES=cookies.txt` for a Netscape-format export.)
+4. **Throttle** — space requests out and cap bandwidth:
+   ```bash
+   make extract-batch PLAYLIST="..." SLEEP=2 LIMIT_RATE=2M COOKIES_FROM=chrome
+   ```
+5. **Rotate off a blocked IP** — route yt-dlp *and* the caption fetcher through
+   a proxy: `PROXY=http://user:pass@host:port`.
+
+All of these vars work on `make extract`, `make extract-batch`, and `make
+test1`. Retries are on by default (`RETRIES=10`) to ride out transient blocks.
+Full flag reference: `python scripts/extract_playlist.py --help` (the
+**network / rate-limit** group).
+
+> If it's Whisper transcription that's slow rather than a network limit, that's
+> a different bottleneck: use a smaller model (`--whisper-model tiny`), install
+> `faster-whisper`, and stay on the captions path so audio never downloads.
+
+### Step 4 — Clean the transcripts
+
+```bash
 make preprocess PLAYLIST_NAME=mycreator
 ```
 
-Each video now has a `transcript.clean.txt` and a `preprocess.json`
-showing what was cut. If the cuts look too aggressive, re-run with
-`--no-sponsor-detect` or `--intro-sec 10`.
+Strips filler ("um", "you know"), sponsor reads, intros/outros, and repeats —
+locally. It typically removes 30–50% of the text **before** anything reaches
+Claude, cutting the next step's cost by roughly the same amount. Each video gets
+a `transcript.clean.txt` and a `preprocess.json` showing what was cut. If the
+cuts look too aggressive, re-run with `--no-sponsor-detect` or `--intro-sec 10`.
 
-**Step 4: configure intent (write `scope.json`).** Until the interactive
-scoper ships, drop this file at `distilled/mycreator/scope.json`:
+### Step 5 — Set the intent (`scope.json`)
+
+Tell the pipeline what to produce. Drop this at
+`distilled/mycreator/scope.json` (or run `make scope PLAYLIST_NAME=mycreator`
+for the interactive scoper):
 
 ```json
 {
@@ -258,11 +251,15 @@ scoper ships, drop this file at `distilled/mycreator/scope.json`:
 }
 ```
 
-**Step 5: distill each video (Phase 2).** This is the first step that
-uses Claude. The defaults use Haiku to keep cost low.
+Change `intent` to any of the six options from Part 1. For `topical-report`,
+also fill in `question`; for `quote-mining` / `stats`, fill in `themes`.
 
-```
-python scripts/run_phase2.py --playlist mycreator
+### Step 6 — Distill each video (Phase 2)
+
+The first step that uses Claude. Defaults to Haiku to keep cost low:
+
+```bash
+make phase2 PLAYLIST_NAME=mycreator
 ```
 
 You'll see live progress and a running total:
@@ -273,108 +270,77 @@ Phase 2: model=claude-haiku-4-5-20251001, intent=method-distillation, 40 videos,
   ✓ video_02: ok (760 out tokens)  [running total: $0.0067]
   ...
 Phase 2 done. Estimated cost: $0.1240
-Cost breakdown: distilled/mycreator/cost.json
 ```
 
-Open `distilled/mycreator/video_01.json` to spot-check the extraction
-(it uses short keys; `python scripts/expand_schema.py
-distilled/mycreator/video_01.json` pretty-prints to verbose form).
+Spot-check `distilled/mycreator/video_01.json` (short keys;
+`python scripts/expand_schema.py distilled/mycreator/video_01.json`
+pretty-prints it). Phase 2 is resumable — completed videos are skipped on re-run.
 
-**Step 6: synthesize across videos.**
+### Step 7 — Synthesize across videos (Phase 3 — the review gate)
 
-```
+```bash
 make phase3 PLAYLIST_NAME=mycreator
 ```
 
-Writes `distilled/mycreator/synthesis.json`. **Eyeball it** — this is
-the human review gate. Confirm the recurring patterns look right
-before paying for Phase 4.
+Writes `distilled/mycreator/synthesis.json`. **Eyeball it.** This is the human
+review gate — confirm the recurring patterns look right before paying for Phase 4.
 
-**Step 7: author the Skill.**
+### Step 8 — Author the output (Phase 4)
 
-```
+```bash
 make phase4 PLAYLIST_NAME=mycreator SKILL_MODE=Teacher
 ```
 
-Writes a versioned, citation-free `SKILL.md`, updates `CHANGELOG.md`,
-and regenerates `citations.md` (the sidecar that maps every claim back
-to a video and timestamp). Re-running bumps the version and backs up
-the previous SKILL.md.
+Writes a versioned, citation-free `SKILL.md`, updates `CHANGELOG.md`, and
+regenerates `citations.md`. Re-running bumps the version and backs up the old
+`SKILL.md`. Load the result into Claude (Claude Code, claude.ai Projects, or the
+API) and it answers in the creator's method.
 
-You now have a Skill. Load it into Claude (via Claude Code, claude.ai
-Projects, or the API) and it will answer in the creator's method.
+**Skill modes** (for `method-distillation`):
 
-**Optional Step 8: evaluate the Skill.**
+- **Teacher** — applies the creator's method to make new things in their style.
+- **Reviewer** — critiques *your* drafts the way that creator would.
+- **Advisor** — answers "what would they recommend here?"
 
-```
+### Step 9 (optional) — Evaluate the Skill
+
+```bash
 make eval PLAYLIST_NAME=mycreator
 ```
 
-Hold-one-out scoring: the last video is withheld and Claude is asked
-to predict its content using only the SKILL.md. Result lands in
+Hold-one-out scoring: the last video is withheld and Claude is asked to predict
+its content from the `SKILL.md` alone. Result lands in
 `distilled/mycreator/score.json`.
 
 ---
 
-### Example B — Answer a question with a topical PDF report
+### Other intents (same first four steps)
 
-**Scenario:** You want to know "what does this creator think about
-compound interest?" — without watching all 40 videos.
+The extract + preprocess steps (2–4) are identical. Only the intent and the
+final command differ:
 
-**Steps 1–3** are the same as Example A (extract + preprocess).
+**Topical report** — set `intent: "topical-report"` with a `question`, then:
 
-**Step 4: set intent to `topical-report` with your question.**
-`distilled/mycreator/scope.json`:
-
-```json
-{
-  "intent": "topical-report",
-  "language": "auto",
-  "depth": "standard",
-  "themes": [],
-  "question": "What does the creator say about compound interest and long-term investing?",
-  "target_audience": "personal",
-  "models": {
-    "phase2": "claude-haiku-4-5-20251001",
-    "phase3": "claude-sonnet-4-6",
-    "phase4": "claude-sonnet-4-6"
-  }
-}
-```
-
-**Step 5: run the topical pipeline.**
-
-```
+```bash
 make topical PLAYLIST_NAME=mycreator
 ```
 
-This calls the targeted extraction prompt on each cleaned transcript
-(only statements relevant to the question), then writes
-`distilled/mycreator/report.md` plus a `citations.md` sidecar. If
-`pandoc` is installed, a `report.pdf` is rendered too.
+Extracts only question-relevant statements per video, writes `report.md` +
+`citations.md`, and renders `report.pdf` when `pandoc` is installed.
 
----
+**Summary:**
 
-### Example C — Just retrieve data: every quote about a topic ($0, no Claude)
-
-**Scenario:** You don't need a Skill or a report — you just want every
-place the creator says "passive income" or "index funds," with
-timestamps.
-
-**Steps 1–3** same as Example A.
-
-**Step 4: run quote-mining locally.** No Claude needed; costs nothing.
-
+```bash
+make summary PLAYLIST_NAME=mycreator
 ```
+
+**Quote-mining ($0, no Claude)** — every place a theme is mentioned, with timestamps:
+
+```bash
 make quote-mine PLAYLIST_NAME=mycreator THEMES="passive income,index funds,compound interest"
 ```
 
-Output: `distilled/mycreator/quotes.md` (human-readable) and
-`citations.json` (machine-readable). Each quote includes the video it
-came from and whether the match was exact, stemmed, or via an alias.
-
-If you want fuzzy/paraphrase matching (e.g., "money working for you"
-should also match `passive income`), add a `distilled/mycreator/themes.aliases.json`:
+For fuzzy/paraphrase matching, add `distilled/mycreator/themes.aliases.json`:
 
 ```json
 {
@@ -383,134 +349,123 @@ should also match `passive income`), add a `distilled/mycreator/themes.aliases.j
 }
 ```
 
----
+**Stats ($0, no Claude):**
 
-### Example D — Grab screenshots when the creator says "look at this"
-
-**Scenario:** The creator points at slides, charts, or code on screen.
-You want a folder of frames at exactly those moments, so you can scan
-them visually instead of re-watching everything.
-
-**Step 1: extract.** Same as Example A; produces transcripts **and**
-the timestamped sidecar (`transcript.timestamped.json`) automatically.
-
-**Step 2: capture screenshots.**
-
+```bash
+make stats PLAYLIST_NAME=mycreator THEMES="ai,markets,inflation"
 ```
+
+**Screenshots at "look at this" moments ($0)** — grabs a frame 1.5s after each
+deictic trigger (`look at this`, `as you can see`, `the chart shows`, …),
+clustered so you don't get five frames of one slide:
+
+```bash
 make screenshots PLAYLIST_NAME=mycreator
-```
-
-This:
-1. Reads the timestamped transcript and scans for trigger phrases:
-   `look at this`, `see here`, `as you can see`, `notice`, `the chart
-   shows`, etc.
-2. Clusters nearby triggers (within 10s) so you don't get 5 frames of
-   the same slide.
-3. Downloads the video at 720p if it's not already local (yt-dlp).
-4. Uses ffmpeg to grab the frame 1.5s *after* the trigger — creators
-   usually say "look at this" right before the visual appears.
-5. Writes frames to `output/mycreator/video_NN_*/screenshots/` with
-   filenames like `001_t0234_look_at_this.jpg` so false positives are
-   obvious and easy to `rm`.
-
-Cost: **$0** (pure local). Per-video cap is 15 screenshots by default
-(`--max-shots`); customize triggers with `--triggers-file mine.txt`.
-
-**Preview without downloading the video:**
-
-```
+# preview candidate timestamps without downloading video:
 python scripts/capture_screenshots.py --playlist mycreator --skip-download
 ```
 
-Writes a `screenshots.json` per video listing the candidate timestamps
-and the speech context around each, so you can decide whether the
-detection looks right before committing to downloads.
+---
+
+### Ask questions about a playlist (RAG, `intent: qa`)
+
+Instead of a Skill or report, index a playlist once and then **ask it
+questions**. Answers are grounded in the transcripts with `[video_NN @ MM:SS]`
+citations, and the tool is built to say *"The playlist doesn't cover this"*
+rather than make something up.
+
+**Steps 1–3** are the same as Example A (extract + preprocess).
+
+**Step 4: build the index** (local, free with the default local embeddings):
+
+```bash
+make index PLAYLIST_NAME=mycreator
+```
+
+This chunks each video over its timestamped transcript (so every chunk keeps a
+real timestamp), embeds the chunks, and writes `rag_index.npz`,
+`rag_index.meta.json`, and `chunks.jsonl` under `distilled/mycreator/`.
+
+**Step 5: ask.**
+
+```bash
+make ask PLAYLIST_NAME=mycreator Q="what does the creator say about index funds?"
+```
+
+Inspect *what would be retrieved* without spending anything on Claude:
+
+```bash
+make ask PLAYLIST_NAME=mycreator Q="..." ASK_FLAGS=--retrieve-only
+```
+
+**Step 6 (optional): measure quality.** Scaffold a small question set, edit it,
+then score faithfulness / answer-relevance / context-relevance:
+
+```bash
+python scripts/rag_eval.py --playlist mycreator --sample   # writes qa_eval.jsonl
+make rag-eval PLAYLIST_NAME=mycreator                       # writes rag_score.json
+```
+
+**Embeddings — local-first, API-swappable.** By default embeddings run
+**locally and free** (`fastembed`; `pip install fastembed`). To switch to a
+hosted embedder, set it in `scope.json` (`"embeddings": {"provider": "voyage",
+"model": "voyage-3-lite"}`) or per-run: `make index PLAYLIST_NAME=mycreator
+RAG_PROVIDER=voyage`. API embedding cost is negligible (~$0.003 to index a
+10-hour playlist). A zero-dependency `hash` provider exists for offline
+tests/CI (`RAG_PROVIDER=hash`) — fast, but not semantic, so don't use it for
+real retrieval.
+
+> Only the **answer** step (Step 5/6) calls Claude; indexing and
+> `--retrieve-only` are free. The query embedder must match the index's — the
+> tool refuses to mix, e.g., local and API vectors.
 
 ---
 
-### Path B — Running it without an API key (Claude Code / Claude Pro)
+### Path B — running the Claude phases without an API key
 
-If you pay for **Claude Pro/Max** or use **Claude Code**, you can run
-the Claude phases entirely through the chat / agent interface — no
-`ANTHROPIC_API_KEY`, no per-token spend on top of your subscription.
-The trade-off is that you do one transcript at a time instead of
-batch-parallel.
+If you pay for **Claude Pro/Max** or use **Claude Code**, run Phases 2–4 through
+the chat/agent interface — no `ANTHROPIC_API_KEY`, no per-token spend. Trade-off:
+one transcript at a time instead of batch-parallel.
 
-**Steps 1–3 (local) are identical to Example A:**
+Steps 2–4 (extract + preprocess) are identical. Then, instead of `make phaseN`:
 
-```
-make extract     PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=mycreator
-make preprocess  PLAYLIST_NAME=mycreator
-```
+- **Phase 2:** paste `prompts/02_distill_video.md` + each `transcript.clean.txt`
+  into Claude; save each JSON response to `distilled/mycreator/video_NN.json`.
+  In Claude Code you can automate it:
 
-You now have `output/mycreator/video_NN_*/transcript.clean.txt` for
-each video. From here, instead of `make phase2/phase3/phase4`:
+  > Read `prompts/02_distill_video.md`, then for each
+  > `output/mycreator/video_*/transcript.clean.txt` run that prompt and write the
+  > JSON to `distilled/mycreator/video_NN.json`. Skip any that already exist.
 
-**Phase 2 — distill each video (in Claude Code or claude.ai):**
+- **Phase 3:** paste `prompts/03_synthesize.md` + all `video_*.json` into one
+  conversation; save the response as `distilled/mycreator/synthesis.json` and
+  eyeball it.
+- **Phase 4:** paste `prompts/04_author_skill.md` + `synthesis.json`; save the
+  result as `distilled/mycreator/SKILL.md`, then regenerate citations locally:
 
-1. Open `prompts/02_distill_video.md` and copy the whole prompt.
-2. In Claude Code (or a new claude.ai chat): paste the prompt, then
-   attach or paste the contents of `transcript.clean.txt` for
-   `video_01`.
-3. Claude returns a single JSON object. Save it verbatim to
-   `distilled/mycreator/video_01.json`.
-4. Repeat for each video. In **Claude Code**, you can speed this up by
-   asking it to read the files itself, e.g.:
+  ```bash
+  make citations PLAYLIST_NAME=mycreator
+  ```
 
-   ```
-   Read prompts/02_distill_video.md, then for each
-   output/mycreator/video_*/transcript.clean.txt run that prompt and
-   write the JSON to distilled/mycreator/video_NN.json. Skip any
-   video_NN.json that already exists.
-   ```
+Topical reports use `prompts/02_topical_extract.md` + `prompts/04_topical_report.md`;
+summaries use `prompts/02_summary.md` + `prompts/03_summary_rollup.md`. You end up
+with the same files as Path A.
 
-**Phase 3 — synthesize across videos:**
-
-Paste `prompts/03_synthesize.md` plus all the `video_*.json` files
-into a single Claude conversation. Save the response as
-`distilled/mycreator/synthesis.json` and eyeball it before moving on.
-In Claude Code:
-
-```
-Use prompts/03_synthesize.md with all distilled/mycreator/video_*.json
-files as input. Write the result to distilled/mycreator/synthesis.json.
-```
-
-**Phase 4 — author the SKILL.md:**
-
-Paste `prompts/04_author_skill.md` plus `synthesis.json` into Claude
-and ask it to follow the prompt. Save the result as
-`distilled/mycreator/SKILL.md`. Then regenerate citations locally:
-
-```
-make citations PLAYLIST_NAME=mycreator
-```
-
-**Topical reports on Path B** work the same way — substitute
-`prompts/02_topical_extract.md` and `prompts/04_topical_report.md`.
-**Summaries** use `prompts/02_summary.md` + `prompts/03_summary_rollup.md`.
-
-You end up with the same files (`SKILL.md`, `citations.md`, etc.) as
-Path A — the only difference is who orchestrates the calls.
-
-> **Note:** `make eval` (hold-one-out scoring) still needs an API key
-> because it programmatically grades the Skill. Skip it on Path B, or
-> grade by hand using `prompts/05_eval_rubric.md`.
+> **Note:** `make eval` still needs an API key (it grades programmatically).
+> Skip it on Path B or grade by hand with `prompts/05_eval_rubric.md`.
 
 ---
 
 ## Where things end up
 
-After a full run you'll find:
-
 ```
 output/mycreator/                     # raw transcripts (do not share)
   video_01_*/transcript.txt
-  video_01_*/transcript.timestamped.json  # segment-level start/end for each line
-  video_01_*/transcript.clean.txt     # preprocessor output
-  video_01_*/preprocess.json          # what was removed and why
-  video_01_*/screenshots/*.jpg        # frames at "look at this" moments (optional)
-  video_01_*/screenshots.json         # manifest: frame -> ts + trigger + context
+  video_01_*/transcript.timestamped.json   # segment-level start/end per line
+  video_01_*/transcript.clean.txt          # preprocessor output
+  video_01_*/preprocess.json               # what was removed and why
+  video_01_*/screenshots/*.jpg             # frames at "look at this" (optional)
+  video_01_*/screenshots.json              # frame → ts + trigger + context
 
 distilled/mycreator/                  # everything Claude touched
   scope.json                          # your intent + model choices
@@ -519,24 +474,24 @@ distilled/mycreator/                  # everything Claude touched
   SKILL.md                            # Phase 4 output (citation-free)
   citations.md                        # which video + timestamp backs each claim
   cost.json                           # exactly what you spent
+
+  # intent=qa (RAG) only:
+  chunks.jsonl                        # timestamped transcript chunks
+  rag_index.npz                       # chunk embedding vectors
+  rag_index.meta.json                 # embedder identity + chunk ids
+  qa_last.json                        # last question, answer, retrieved chunks
+  rag_score.json                      # eval metrics (when you run rag-eval)
 ```
-
----
-
-## Skill modes (when you pick `method-distillation`)
-
-- **Teacher** — the Skill applies the creator's method to make new things
-  in their style.
-- **Reviewer** — the Skill critiques *your* drafts the way that creator
-  would.
-- **Advisor** — the Skill answers "what would they recommend here?"
 
 ---
 
 ## Project documents
 
-- [`docs/PRD.md`](docs/PRD.md) — product requirements: every phase, every
-  output, cost model, compliance notes. Start here if you want the full picture.
+- [`docs/PRD.md`](docs/PRD.md) — product requirements: every phase, output, cost
+  model, and compliance note. Start here for the full picture.
+- [`docs/LEARNING_WALKTHROUGH.md`](docs/LEARNING_WALKTHROUGH.md) — a teaching
+  walkthrough of the codebase for people new to Python/AI: RAG, embeddings,
+  evaluation, and the Python patterns used here, with interview prep.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute.
 - [`SECURITY.md`](SECURITY.md) — how to report a security issue privately.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards.
@@ -549,5 +504,5 @@ distilled/mycreator/                  # everything Claude touched
 Apache-2.0 — free, open source, no warranty. See [`LICENSE`](LICENSE).
 
 The code and prompts in this repo are Apache-2.0 licensed. Anything you
-**generate** by running the tool (a Skill, a report, etc.) is yours — but
-your right to use it is limited by your rights in the source content.
+**generate** by running the tool (a Skill, a report, etc.) is yours — but your
+right to use it is limited by your rights in the source content.
