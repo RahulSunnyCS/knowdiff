@@ -61,26 +61,39 @@ jobs:
       - name: Sanity-import all scripts (no execution)
         # Import succeeds if the module is well-formed. Side-effecting
         # main() blocks are not entered because we use importlib.
+        #
+        # scripts/ is added to sys.path and each module is registered in
+        # sys.modules under its own name BEFORE exec_module runs — this
+        # mirrors what `python scripts/foo.py` does at runtime, so sibling
+        # imports (`import scope`, `from accounting import ...`) resolve,
+        # and @dataclass (which looks up cls.__module__ in sys.modules)
+        # doesn't crash on a module that isn't registered yet.
         run: |
           python - <<'PY'
           import importlib.util, sys
           from pathlib import Path
 
+          scripts_dir = Path("scripts").resolve()
+          sys.path.insert(0, str(scripts_dir))
+
           fails = []
-          for p in sorted(Path("scripts").glob("*.py")):
+          for p in sorted(scripts_dir.glob("*.py")):
               spec = importlib.util.spec_from_file_location(p.stem, p)
+              mod = importlib.util.module_from_spec(spec)
+              sys.modules[p.stem] = mod
               try:
-                  mod = importlib.util.module_from_spec(spec)
                   spec.loader.exec_module(mod)
               except SystemExit:
                   pass  # argparse-driven scripts that call sys.exit on import
               except Exception as e:
                   fails.append(f"{p}: {type(e).__name__}: {e}")
+                  sys.modules.pop(p.stem, None)
           if fails:
               print("Import failures:")
               for f in fails:
                   print(f"  - {f}")
               sys.exit(1)
+          print(f"Sanity-imported {len(list(scripts_dir.glob('*.py')))} scripts OK.")
           PY
 
   markdown-links:
