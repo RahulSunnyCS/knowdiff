@@ -9,7 +9,38 @@ VIDEOS ?=
 # at 1 for --force-whisper / screen-heavy on modest hardware.
 JOBS ?= 1
 
-EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS)
+# Network / rate-limit knobs. Empty by default; set on the command line when
+# YouTube throttles you (429 / "confirm you're not a bot"). See README.
+#   COOKIES_FROM=chrome   COOKIES=cookies.txt   PROXY=http://host:port
+#   SLEEP=2 (between requests)   SLEEP_MIN / SLEEP_MAX (per download)
+#   RETRIES=10   LIMIT_RATE=2M
+NET_FLAGS =
+ifneq ($(strip $(COOKIES_FROM)),)
+NET_FLAGS += --cookies-from-browser $(COOKIES_FROM)
+endif
+ifneq ($(strip $(COOKIES)),)
+NET_FLAGS += --cookies $(COOKIES)
+endif
+ifneq ($(strip $(PROXY)),)
+NET_FLAGS += --proxy $(PROXY)
+endif
+ifneq ($(strip $(SLEEP)),)
+NET_FLAGS += --sleep-requests $(SLEEP)
+endif
+ifneq ($(strip $(SLEEP_MIN)),)
+NET_FLAGS += --sleep-interval $(SLEEP_MIN)
+endif
+ifneq ($(strip $(SLEEP_MAX)),)
+NET_FLAGS += --max-sleep-interval $(SLEEP_MAX)
+endif
+ifneq ($(strip $(RETRIES)),)
+NET_FLAGS += --retries $(RETRIES)
+endif
+ifneq ($(strip $(LIMIT_RATE)),)
+NET_FLAGS += --limit-rate $(LIMIT_RATE)
+endif
+
+EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS) $(NET_FLAGS)
 ifneq ($(strip $(VIDEOS)),)
 EXTRACT_FLAGS += --videos "$(VIDEOS)"
 endif
@@ -53,7 +84,7 @@ scope:
 	python3 scripts/scope_init.py --playlist $(PLAYLIST_NAME)
 
 test1:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT) $(NET_FLAGS)
 
 # Only forward a variable to the interactive front-end if the user
 # actually set it (command line or environment) — Makefile defaults
@@ -67,6 +98,14 @@ extract:
 	 VIDEOS="$(call _user_set,VIDEOS)" \
 	 JOBS="$(call _user_set,JOBS)" \
 	 OUT="$(OUT)" \
+	 COOKIES_FROM="$(COOKIES_FROM)" \
+	 COOKIES="$(COOKIES)" \
+	 PROXY="$(PROXY)" \
+	 SLEEP="$(SLEEP)" \
+	 SLEEP_MIN="$(SLEEP_MIN)" \
+	 SLEEP_MAX="$(SLEEP_MAX)" \
+	 RETRIES="$(RETRIES)" \
+	 LIMIT_RATE="$(LIMIT_RATE)" \
 	 python3 scripts/extract_interactive.py
 
 extract-batch:

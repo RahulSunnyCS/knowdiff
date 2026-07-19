@@ -184,6 +184,38 @@ make extract-batch PLAYLIST="..." JOBS=4             # 4 videos in parallel
 `JOBS>1` is safe on the captions-first path (IO-bound). Keep `JOBS=1` for
 `--force-whisper` or `MODE=screen-heavy` unless you have spare CPU.
 
+#### Hitting a download / rate limit? (`429`, "confirm you're not a bot")
+
+YouTube throttles anonymous, high-rate access. If extraction starts failing
+with `HTTP Error 429`, a bot-check prompt, or captions coming back empty on
+videos that clearly have them, work through these in order:
+
+1. **Update yt-dlp** — `pip install -U yt-dlp` (or `brew upgrade yt-dlp`).
+   An outdated yt-dlp is the most common cause of sudden "limit" errors.
+2. **Go serial** — drop `JOBS` back to `1`; parallelism is the fastest way to
+   get flagged.
+3. **Authenticate with cookies** — the single most effective fix for bot
+   checks. Pass a browser you're logged into YouTube on:
+   ```bash
+   make extract-batch PLAYLIST="..." PLAYLIST_NAME=mycreator COOKIES_FROM=chrome
+   ```
+   (or `COOKIES=cookies.txt` for a Netscape-format export.)
+4. **Throttle** — space requests out and cap bandwidth:
+   ```bash
+   make extract-batch PLAYLIST="..." SLEEP=2 LIMIT_RATE=2M COOKIES_FROM=chrome
+   ```
+5. **Rotate off a blocked IP** — route yt-dlp *and* the caption fetcher through
+   a proxy: `PROXY=http://user:pass@host:port`.
+
+All of these vars work on `make extract`, `make extract-batch`, and `make
+test1`. Retries are on by default (`RETRIES=10`) to ride out transient blocks.
+Full flag reference: `python scripts/extract_playlist.py --help` (the
+**network / rate-limit** group).
+
+> If it's Whisper transcription that's slow rather than a network limit, that's
+> a different bottleneck: use a smaller model (`--whisper-model tiny`), install
+> `faster-whisper`, and stay on the captions path so audio never downloads.
+
 ### Step 4 — Clean the transcripts
 
 ```bash
