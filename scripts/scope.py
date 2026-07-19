@@ -21,6 +21,14 @@ DEFAULT_MODELS = {
     "phase4": "claude-sonnet-4-6",
 }
 
+# Embeddings for the `qa` (RAG) intent. Local-first by default to preserve the
+# offline/$0-local principle; an API provider (voyage/openai) is a config-only
+# switch. `hash` is a zero-dependency baseline used for tests and offline runs.
+DEFAULT_EMBEDDINGS = {
+    "provider": "local",              # local | hash | voyage | openai
+    "model": "BAAI/bge-small-en-v1.5",
+}
+
 VALID_INTENTS = {
     "method-distillation",
     "style-clone",
@@ -28,6 +36,7 @@ VALID_INTENTS = {
     "stats",
     "quote-mining",
     "topical-report",
+    "qa",
 }
 
 
@@ -40,6 +49,7 @@ class Scope:
     question: str = ""
     target_audience: str = "personal"
     models: dict = field(default_factory=lambda: dict(DEFAULT_MODELS))
+    embeddings: dict = field(default_factory=lambda: dict(DEFAULT_EMBEDDINGS))
 
     def validate(self) -> None:
         if self.intent not in VALID_INTENTS:
@@ -54,6 +64,12 @@ class Scope:
     def model_for(self, phase: str) -> str:
         return self.models.get(phase, DEFAULT_MODELS.get(phase, DEFAULT_MODELS["phase2"]))
 
+    def embedding_provider(self) -> str:
+        return self.embeddings.get("provider", DEFAULT_EMBEDDINGS["provider"])
+
+    def embedding_model(self) -> str:
+        return self.embeddings.get("model", DEFAULT_EMBEDDINGS["model"])
+
 
 def scope_path(distilled_root: Path, playlist: str) -> Path:
     return distilled_root / playlist / "scope.json"
@@ -67,6 +83,7 @@ def load(distilled_root: Path, playlist: str) -> Scope:
         return scope
     data = json.loads(p.read_text())
     models = {**DEFAULT_MODELS, **data.get("models", {})}
+    embeddings = {**DEFAULT_EMBEDDINGS, **data.get("embeddings", {})}
     scope = Scope(
         intent=data.get("intent", "method-distillation"),
         language=data.get("language", "auto"),
@@ -75,6 +92,7 @@ def load(distilled_root: Path, playlist: str) -> Scope:
         question=data.get("question", ""),
         target_audience=data.get("target_audience", "personal"),
         models=models,
+        embeddings=embeddings,
     )
     scope.validate()
     return scope

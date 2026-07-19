@@ -45,9 +45,23 @@ ifneq ($(strip $(VIDEOS)),)
 EXTRACT_FLAGS += --videos "$(VIDEOS)"
 endif
 
+# RAG (intent=qa) knobs. Provider/model default to scope.json's embeddings block
+# when left empty. Q is the question for `make ask`.
+RAG_PROVIDER ?=
+RAG_MODEL ?=
+TOPK ?= 6
+Q ?=
+RAG_FLAGS =
+ifneq ($(strip $(RAG_PROVIDER)),)
+RAG_FLAGS += --provider $(RAG_PROVIDER)
+endif
+ifneq ($(strip $(RAG_MODEL)),)
+RAG_FLAGS += --model $(RAG_MODEL)
+endif
+
 .PHONY: help scope test1 extract extract-batch preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        diff-synthesis eval clean
+        index ask rag-eval diff-synthesis eval clean
 
 help:
 	@echo "Setup:"
@@ -70,6 +84,13 @@ help:
 	@echo "  make summary PLAYLIST_NAME=...          - per-video + playlist summary"
 	@echo "  make stats PLAYLIST_NAME=...            - local word/topic stats (\$$0)"
 	@echo "  make quote-mine PLAYLIST_NAME=... THEMES='a,b,c'  - quotes (\$$0)"
+	@echo ""
+	@echo "Ask questions (RAG, intent=qa):"
+	@echo "  make index PLAYLIST_NAME=...            - build the retrieval index"
+	@echo "  make ask PLAYLIST_NAME=... Q='...'      - grounded, cited answer"
+	@echo "  make ask PLAYLIST_NAME=... Q='...' ASK_FLAGS=--retrieve-only  - inspect retrieval (\$$0)"
+	@echo "  make rag-eval PLAYLIST_NAME=...         - score faithfulness/relevance"
+	@echo "    (RAG_PROVIDER=local|hash|voyage|openai  RAG_MODEL=...  TOPK=6)"
 	@echo ""
 	@echo "Audit + iterate:"
 	@echo "  make citations PLAYLIST_NAME=...        - regenerate citations sidecar"
@@ -140,6 +161,18 @@ screenshots:
 
 citations:
 	python3 scripts/citations.py --playlist $(PLAYLIST_NAME)
+
+# --- RAG (intent=qa) ---
+ASK_FLAGS ?=
+
+index:
+	python3 scripts/rag_index.py --playlist $(PLAYLIST_NAME) --output-root $(OUT) $(RAG_FLAGS)
+
+ask:
+	python3 scripts/rag_ask.py --playlist $(PLAYLIST_NAME) --top-k $(TOPK) --question "$(Q)" $(RAG_FLAGS) $(ASK_FLAGS)
+
+rag-eval:
+	python3 scripts/rag_eval.py --playlist $(PLAYLIST_NAME) --top-k $(TOPK)
 
 diff-synthesis:
 	python3 scripts/diff_synthesis.py --old "$(OLD)" --new "$(NEW)" --out distilled/$(PLAYLIST_NAME)/CHANGELOG.md

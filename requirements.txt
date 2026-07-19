@@ -13,3 +13,12 @@ youtube-transcript-api>=0.6.0
 # Optional — only needed for screen-heavy mode (frame dedup).
 # imagehash>=4.3.1
 # pillow>=10.0.0
+# Optional — only needed for the RAG Q&A intent (make index / make ask / make
+# rag-eval). numpy backs the vector index; pick ONE embedding backend for real
+# semantic search. The zero-dependency 'hash' provider needs only numpy and is
+# meant for tests / offline smoke runs, not quality retrieval.
+# numpy>=1.24
+# fastembed>=0.3.0             # recommended local embeddings (default provider)
+# sentence-transformers>=2.2   # alternate local embeddings
+# voyageai>=0.2.0              # API embeddings (provider=voyage; Anthropic partner)
+# openai>=1.0                  # API embeddings (provider=openai; alternate)

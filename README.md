@@ -35,6 +35,7 @@ You choose the shape of the output **before** the run starts. Six options:
 | `stats`               | How often a creator says a word / mentions a topic (no Claude cost)     | `stats.json` / `stats.md`   |
 | `quote-mining`        | A list of verbatim quotes matching themes you specify (no Claude cost)  | `quotes.md`                 |
 | `style-clone`         | A Skill that mimics the creator's *phrasing*, not just their method      | `SKILL.md`                  |
+| `qa` (RAG)            | To **ask questions** and get answers grounded in the playlist            | cited answers + `rag_score.json` |
 
 Every output (except `stats`) also produces a `citations.md` sidecar mapping
 each claim back to **the exact video and timestamp** it came from. The Skill or
@@ -366,6 +367,60 @@ python scripts/capture_screenshots.py --playlist mycreator --skip-download
 
 ---
 
+### Ask questions about a playlist (RAG, `intent: qa`)
+
+Instead of a Skill or report, index a playlist once and then **ask it
+questions**. Answers are grounded in the transcripts with `[video_NN @ MM:SS]`
+citations, and the tool is built to say *"The playlist doesn't cover this"*
+rather than make something up.
+
+**Steps 1–3** are the same as Example A (extract + preprocess).
+
+**Step 4: build the index** (local, free with the default local embeddings):
+
+```bash
+make index PLAYLIST_NAME=mycreator
+```
+
+This chunks each video over its timestamped transcript (so every chunk keeps a
+real timestamp), embeds the chunks, and writes `rag_index.npz`,
+`rag_index.meta.json`, and `chunks.jsonl` under `distilled/mycreator/`.
+
+**Step 5: ask.**
+
+```bash
+make ask PLAYLIST_NAME=mycreator Q="what does the creator say about index funds?"
+```
+
+Inspect *what would be retrieved* without spending anything on Claude:
+
+```bash
+make ask PLAYLIST_NAME=mycreator Q="..." ASK_FLAGS=--retrieve-only
+```
+
+**Step 6 (optional): measure quality.** Scaffold a small question set, edit it,
+then score faithfulness / answer-relevance / context-relevance:
+
+```bash
+python scripts/rag_eval.py --playlist mycreator --sample   # writes qa_eval.jsonl
+make rag-eval PLAYLIST_NAME=mycreator                       # writes rag_score.json
+```
+
+**Embeddings — local-first, API-swappable.** By default embeddings run
+**locally and free** (`fastembed`; `pip install fastembed`). To switch to a
+hosted embedder, set it in `scope.json` (`"embeddings": {"provider": "voyage",
+"model": "voyage-3-lite"}`) or per-run: `make index PLAYLIST_NAME=mycreator
+RAG_PROVIDER=voyage`. API embedding cost is negligible (~$0.003 to index a
+10-hour playlist). A zero-dependency `hash` provider exists for offline
+tests/CI (`RAG_PROVIDER=hash`) — fast, but not semantic, so don't use it for
+real retrieval.
+
+> Only the **answer** step (Step 5/6) calls Claude; indexing and
+> `--retrieve-only` are free. The query embedder must match the index's — the
+> tool refuses to mix, e.g., local and API vectors.
+
+---
+
 ### Path B — running the Claude phases without an API key
 
 If you pay for **Claude Pro/Max** or use **Claude Code**, run Phases 2–4 through
@@ -419,6 +474,13 @@ distilled/mycreator/                  # everything Claude touched
   SKILL.md                            # Phase 4 output (citation-free)
   citations.md                        # which video + timestamp backs each claim
   cost.json                           # exactly what you spent
+
+  # intent=qa (RAG) only:
+  chunks.jsonl                        # timestamped transcript chunks
+  rag_index.npz                       # chunk embedding vectors
+  rag_index.meta.json                 # embedder identity + chunk ids
+  qa_last.json                        # last question, answer, retrieved chunks
+  rag_score.json                      # eval metrics (when you run rag-eval)
 ```
 
 ---
