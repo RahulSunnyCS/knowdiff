@@ -489,6 +489,9 @@ distilled/mycreator/                  # everything Claude touched
 
 - [`docs/PRD.md`](docs/PRD.md) — product requirements: every phase, output, cost
   model, and compliance note. Start here for the full picture.
+- [`docs/LEARNING_WALKTHROUGH.md`](docs/LEARNING_WALKTHROUGH.md) — a teaching
+  walkthrough of the codebase for people new to Python/AI: RAG, embeddings,
+  evaluation, and the Python patterns used here, with interview prep.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute.
 - [`SECURITY.md`](SECURITY.md) — how to report a security issue privately.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards.
