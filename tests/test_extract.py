@@ -56,6 +56,19 @@ class Json3Tests(unittest.TestCase):
         self.assertEqual(ex.choose_caption_tracks({"subtitles": {"de": []}}), [])
         self.assertEqual(ex.choose_caption_tracks({"subtitles": {"de": []}}, "de"), ["de"])
 
+    def test_slim_info_json_keeps_only_caption_language(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "source.info.json"
+            info = {"id": "x", "subtitles": {"de": []},
+                    "automatic_captions": {"en": [1], "en-orig": [2], "fr": [3], "hi": [4]}}
+            path.write_text(json.dumps(info))
+            ex._slim_info_json(path, info, "en")
+            on_disk = json.loads(path.read_text())
+            self.assertEqual(sorted(on_disk["automatic_captions"]), ["en", "en-orig"])
+            self.assertEqual(on_disk["automatic_caption_langs_total"], 4)
+            self.assertEqual(on_disk["subtitles"], {"de": []})
+            self.assertEqual(ex.choose_caption_tracks(on_disk), ["en", "en-orig"])
+
     def test_looks_blocked(self):
         self.assertTrue(ex.looks_blocked("ERROR: Sign in to confirm you're not a bot"))
         self.assertTrue(ex.looks_blocked("HTTP Error 429: Too Many Requests"))

@@ -130,6 +130,10 @@ to populate.
   while later phases read `output/<PLAYLIST_NAME>/`).
 - `metadata.json` written per video (`capture_screenshots.py` was reading
   a `url` nobody wrote).
+- The cached `source.info.json` keeps auto-caption entries only for the
+  caption language (≈10 MB → ≈100 KB per video).
+- Intro/outro trims are each capped at 5% of the video's length, so a
+  2-minute clip no longer loses 40% of its transcript.
 
 ### ✓ 18. Real timestamps in citations
 Phase 2 never saw timestamps (flat text only), so every `ts` was a guess.
