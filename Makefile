@@ -6,7 +6,7 @@ SKILL_MODE ?= Teacher
 
 .PHONY: help scope test1 extract preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        diff-synthesis eval clean
+        diff-synthesis eval test clean
 
 help:
 	@echo "Setup:"
@@ -32,7 +32,8 @@ help:
 	@echo "Audit + iterate:"
 	@echo "  make citations PLAYLIST_NAME=...        - regenerate citations sidecar"
 	@echo "  make diff-synthesis OLD=... NEW=...     - compare two synthesis.json"
-	@echo "  make eval PLAYLIST_NAME=...             - hold-one-out scoring"
+	@echo "  make eval PLAYLIST_NAME=...             - hold-one-out scoring (leak-free rebuild)"
+	@echo "  make test                               - run the unit tests (no network, no API key)"
 	@echo "  make clean                              - remove output/ and distilled/"
 	@echo ""
 	@echo "Vars: PLAYLIST=<url>  PLAYLIST_NAME=<dir>  MODE={talking-head,screen-heavy}  OUT=<dir>"
@@ -41,10 +42,10 @@ scope:
 	python3 scripts/scope_init.py --playlist $(PLAYLIST_NAME)
 
 test1:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --playlist-name $(PLAYLIST_NAME) --mode $(MODE) --max-videos 1 --out $(OUT)
 
 extract:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --out $(OUT)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --playlist-name $(PLAYLIST_NAME) --mode $(MODE) --out $(OUT)
 
 preprocess:
 	python3 scripts/preprocess_transcript.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
@@ -80,7 +81,10 @@ diff-synthesis:
 	python3 scripts/diff_synthesis.py --old "$(OLD)" --new "$(NEW)" --out distilled/$(PLAYLIST_NAME)/CHANGELOG.md
 
 eval:
-	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
+	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT) --mode $(SKILL_MODE)
+
+test:
+	python3 -m unittest discover -s tests -v
 
 clean:
 	rm -rf $(OUT) distilled

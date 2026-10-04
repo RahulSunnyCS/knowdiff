@@ -111,9 +111,74 @@ source, `score.json` ≥ 0.60, explicit attribution). Directory is
 intentionally empty in initial release — needs a real CC playlist run
 to populate.
 
+### ✓ 17. Extraction fixes (2026-10 review)
+- Idempotent extract: a video with `transcript.txt` + sidecar is never
+  refetched (`--force` to override). PRD F1.6 was documented but not
+  implemented; re-runs after a block used to re-hit every video.
+- One yt-dlp call per video (info.json + description + json3 captions)
+  replaces the description call + 2–4 `youtube-transcript-api` calls.
+  `youtube-transcript-api` dropped. Raw `source.*` files kept as cache.
+- Paced by default (`--sleep-requests`, `--sleep-subtitles`,
+  `--pause-sec`); stops with exit code 3 on the first block signature;
+  `--cookies-from-browser` / `--extractor-args` / `--yt-dlp-args`
+  pass-through. README "Rate limits" section.
+- `--playlist-name` flag; the Makefile now passes `PLAYLIST_NAME` to
+  `extract`/`test1` (previously everything landed in `output/playlist/`
+  while later phases read `output/<PLAYLIST_NAME>/`).
+- `metadata.json` written per video (`capture_screenshots.py` was reading
+  a `url` nobody wrote).
+
+### ✓ 18. Real timestamps in citations
+Phase 2 never saw timestamps (flat text only), so every `ts` was a guess.
+The preprocessor now renders `[MM:SS]` markers every 30 s from the
+sidecar, trims intro/outro by time and splits chapters by segment time;
+the distill + topical prompts read the nearest marker. Quote-mining
+reports `ts` per hit.
+
+### ✓ 19. Leak-free eval
+`run_eval.py` rebuilt Phase 3 + 4 in a scratch root with the held-out
+JSON removed, as the docstring always claimed. `score.json` carries
+`leak_free`.
+
+### ✓ 20. Models, prices, client
+Defaults → `claude-haiku-4-5` / `claude-sonnet-5-5`; pricing table
+corrected (Opus 4.7 was 3× its real price) and extended; the client
+delegates retries to the SDK (no more retrying 400s) and surfaces
+truncation / refusals.
+
+### ✓ 21. Unit tests
+`tests/` (stdlib `unittest`, fake yt-dlp on PATH) + CI step. `make test`.
+
 ---
 
 ## Open (deferred from this batch)
+
+### Structured outputs for the JSON phases
+Phase 2 still parses free-text JSON and re-prompts on verbose keys. The
+Messages API's `output_config.format` would guarantee the compact schema
+in one call and delete the retry path. Needs a live key to verify.
+
+### Batch API for Phase 2
+Per-video distillation is not latency-sensitive and is embarrassingly
+parallel: the Message Batches API halves its cost. Resumability must then
+key on batch ids, not just on-disk JSON.
+
+### Hierarchical Phase 3
+One synthesis call caps at ~150 videos of compact JSON. Chunk + reduce
+for bigger channels.
+
+### `knowledge-diff` intent (the name on the repo)
+Segment-level claims compared against a personal knowledge store (every
+distilled JSON so far + a syllabus/progress file) → "watch these 12
+minutes of 58" with deep links. Haiku as the "is this already covered"
+judge. Not started.
+
+### `strategy-claims` intent
+Per-video hypothesis cards (instrument, entry, exit, sizing, stated
+regime, quote, ts) for trading content, clustered across creators, then
+translated into the sibling option-backtesting DSL via its MCP
+`propose_strategy`/`validate_strategy` with the untranslatable parts
+listed, never guessed. Not started.
 
 ### Whisper item 9 — speaker diarization
 Best done via WhisperX as a single bundle (forced-alignment + diarization).
