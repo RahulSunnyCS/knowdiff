@@ -6,7 +6,7 @@ SKILL_MODE ?= Teacher
 
 .PHONY: help scope test1 extract preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        diff-synthesis eval knowledge-diff test mcp mcp-http clean
+        diff-synthesis eval knowledge-diff strategy-cards test mcp mcp-http clean
 
 help:
 	@echo "Setup:"
@@ -28,6 +28,7 @@ help:
 	@echo "  make summary PLAYLIST_NAME=...          - per-video + playlist summary"
 	@echo "  make stats PLAYLIST_NAME=...            - local word/topic stats (\$$0)"
 	@echo "  make quote-mine PLAYLIST_NAME=... THEMES='a,b,c'  - quotes (\$$0)"
+	@echo "  make strategy-cards                     - rebuild the clustered strategy-card index (\$$0)"
 	@echo "  make knowledge-diff PLAYLIST_NAME=...   - watch-list of what is new to you (\$$0, word-overlap judge)"
 	@echo ""
 	@echo "Audit + iterate:"
@@ -85,6 +86,9 @@ diff-synthesis:
 
 eval:
 	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT) --mode $(SKILL_MODE)
+
+strategy-cards:
+	python3 scripts/strategy_claims.py
 
 knowledge-diff:
 	python3 scripts/knowledge_diff.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)

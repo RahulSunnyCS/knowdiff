@@ -100,6 +100,7 @@ You tell the tool what you want before it starts. Options:
 | `quote-mining`        | A list of verbatim quotes matching themes you specify                   | `quotes.md`                      |
 | `style-clone`         | A Skill that mimics the creator's *phrasing*, not just method           | `SKILL.md`                       |
 | `knowledge-diff`      | Only the minutes of each video that are new to *you*                    | `watchlist.md`                   |
+| `strategy-claims`     | The testable trading ideas in a video, ready to backtest                | `strategy_cards.md`              |
 
 Every output (except `stats`) also produces a separate `citations.md`
 file mapping each claim back to **the exact video and timestamp** it
@@ -490,7 +491,8 @@ pip install mcp
 Tools: `list_playlists`, `list_videos`, `start_extract`, `extract_status`,
 `preprocess`, `get_transcript`, `get_prompt`, `get_distilled`,
 `save_distilled`, `save_synthesis`, `save_skill`, `quote_mine`,
-`get_diff_candidates`, `save_knowledge_diff`.
+`get_diff_candidates`, `save_knowledge_diff`, `save_strategy_cards`,
+`get_strategy_cards`, `save_strategy_translation`.
 `save_distilled` refuses any `ts` that is not a `[MM:SS]` marker in that
 video's transcript, so invented timestamps cannot be saved.
 
@@ -556,6 +558,37 @@ JSON per video under `distilled/<playlist>/knowledge_diff/`. A passage
 runs from an item's `[MM:SS]` marker to the next item's marker (30 s to
 3 min), and nearby passages are merged, so ranges are approximate to
 about one marker interval.
+
+---
+
+## Strategy claims — trading ideas as testable cards
+
+For trading content, a connected Claude can pull each testable idea out
+of a video as a *hypothesis card*: instrument, structure, entry, exit,
+sizing, stated regime, the claimed edge, the creator's exact words and a
+deep link to where they said them. This intent runs through the MCP
+server only (no API-key script).
+
+1. `get_prompt("02_strategy_claims")` + `get_transcript` →
+   `save_strategy_cards`. A card is rejected if its quote is not in the
+   transcript word for word or its timestamp is not a real marker.
+   Anything the creator did not state stays `null`.
+2. `get_strategy_cards` groups cards by instrument and structure across
+   playlists, so ideas several creators share come first. The same view
+   is written to `distilled/strategy_cards.md` (`make strategy-cards`
+   rebuilds it).
+3. To backtest a card, also connect the sibling `ai-trading-agent`
+   repo's `option-backtesting` MCP server and follow
+   `get_prompt("07_strategy_translate")`: write the strategy YAML, check
+   it with that server's `validate_strategy`, then
+   `save_strategy_translation`. Every rule the DSL cannot express, and
+   every value the strategy needed that the creator never gave, must be
+   listed under `manual_review`; a translation that silently fills in an
+   unstated entry, exit or sizing is rejected.
+
+The cards are creators' claims, not results. `valid` on a translation is
+what `validate_strategy` reported to the translating session; knowdiff
+records it and cannot re-check it.
 
 ---
 

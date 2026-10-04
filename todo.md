@@ -172,6 +172,17 @@ and the not-known ones become merged, deep-linked watch ranges in
 built: an API-model judge for the CLI (needs a key), and marking a
 video as "watched" independently of it being distilled.
 
+### ✓ 24. `strategy-claims` intent
+`scripts/strategy_claims.py`, `prompts/02_strategy_claims.md`,
+`prompts/07_strategy_translate.md`, MCP tools `save_strategy_cards` /
+`get_strategy_cards` / `save_strategy_translation`. Hypothesis cards
+grounded by a verbatim-quote check and the timestamp guard, clustered by
+instrument + structure across creators, with a translation record whose
+`manual_review` must name every unstated entry/exit/sizing the YAML had
+to choose. Unit-tested; the option-backtesting `validate_strategy` call
+the translation prompt relies on was checked live with a card-shaped
+YAML. Not yet run on a real trading video.
+
 ---
 
 ## Open (deferred from this batch)
@@ -189,13 +200,6 @@ key on batch ids, not just on-disk JSON.
 ### Hierarchical Phase 3
 One synthesis call caps at ~150 videos of compact JSON. Chunk + reduce
 for bigger channels.
-
-### `strategy-claims` intent
-Per-video hypothesis cards (instrument, entry, exit, sizing, stated
-regime, quote, ts) for trading content, clustered across creators, then
-translated into the sibling option-backtesting DSL via its MCP
-`propose_strategy`/`validate_strategy` with the untranslatable parts
-listed, never guessed. Not started.
 
 ### Whisper item 9 — speaker diarization
 Best done via WhisperX as a single bundle (forced-alignment + diarization).
