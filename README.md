@@ -471,6 +471,57 @@ distilled/mycreator/                  # everything Claude touched
 
 ---
 
+## MCP server (no API key)
+
+`scripts/mcp_server.py` exposes knowdiff to any Claude session as an MCP
+server. The server does the local, free work — yt-dlp extraction,
+transcript cleaning, reading and saving files, quote-mining. The Claude
+that connects does the distillation, synthesis and SKILL.md authoring
+itself, using the same prompts as Phases 2–4, so this route needs **no
+`ANTHROPIC_API_KEY`**: it runs on whatever Claude plan the session
+already has. Results land in the same `distilled/<playlist>/` files the
+API pipeline writes, so the two routes are interchangeable.
+
+```bash
+pip install mcp
+```
+
+Tools: `list_playlists`, `list_videos`, `start_extract`, `extract_status`,
+`preprocess`, `get_transcript`, `get_prompt`, `get_distilled`,
+`save_distilled`, `save_synthesis`, `save_skill`, `quote_mine`.
+`save_distilled` refuses any `ts` that is not a `[MM:SS]` marker in that
+video's transcript, so invented timestamps cannot be saved.
+
+**On the same machine (Claude Code, Claude Desktop).** The repo's
+`.mcp.json` registers the server over stdio; open the repo in Claude Code
+and it is picked up. For another client, the command is
+`python3 scripts/mcp_server.py`.
+
+**From the cloud (claude.ai, cloud sessions) to your laptop.** The laptop
+must be awake with both the server and a tunnel running:
+
+```bash
+export KNOWDIFF_MCP_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python3 scripts/mcp_server.py --http --allowed-host knowdiff.example.com   # binds 127.0.0.1:8770
+cloudflared tunnel run knowdiff      # a tunnel routing knowdiff.example.com -> http://127.0.0.1:8770
+```
+
+Then add `https://knowdiff.example.com/<token>/mcp` as a custom connector.
+For a quick try without a domain, `cloudflared tunnel --url
+http://127.0.0.1:8770` prints a temporary `*.trycloudflare.com` hostname;
+start the server with that hostname as `--allowed-host`.
+
+What protects it: the server only listens on loopback, rejects requests
+whose `Host` is not one you allowed, and is mounted on a path containing
+the token, so the URL is the credential — treat it like a password and
+rotate it by changing `KNOWDIFF_MCP_TOKEN`. Tools can only read and write
+under `output/` and `distilled/`, and can only launch yt-dlp against
+`https://youtube.com` / `youtu.be` links. That is a shared-secret URL, not
+per-user login; put Cloudflare Access or OAuth in front if more than one
+person will have the link.
+
+---
+
 ## Rate limits
 
 YouTube throttles and blocks automated caption fetching, and it blocks

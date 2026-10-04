@@ -152,6 +152,15 @@ truncation / refusals.
 ### ✓ 21. Unit tests
 `tests/` (stdlib `unittest`, fake yt-dlp on PATH) + CI step. `make test`.
 
+### ✓ 22. MCP server
+`scripts/mcp_server.py` (stdio, or streamable HTTP on loopback behind a
+tunnel with a token in the path). Local work stays on the laptop; the
+connected Claude does Phases 2–4 itself from the same prompts, so no API
+key is needed. `save_distilled` rejects any `ts` that is not a marker in
+the transcript. README "MCP server". Verified live over stdio and HTTP
+against a real extracted playlist; not yet verified through a real tunnel
+or from claude.ai.
+
 ---
 
 ## Open (deferred from this batch)
