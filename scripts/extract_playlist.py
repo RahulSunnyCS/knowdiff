@@ -9,7 +9,8 @@ into a Claude Skill.
 EVERYTHING here runs locally and FREE. No API calls. No paid services.
 
 Pipeline per video:
-    1. ONE yt-dlp call  -> info JSON + description + caption track (json3)
+    1. Two yt-dlp calls -> info JSON + description, then exactly ONE caption
+                           track (json3) picked from that metadata
                            (captions first; Whisper fallback only if none)
     2. (optional) Scene-frame extraction for screen-heavy creators
     3. (optional) OCR frames -> on-screen code/text becomes plain text
@@ -34,7 +35,10 @@ Rate-limit posture (see README "Rate limits"):
     * Idempotent: a video whose transcript + timestamped sidecar already
       exist is never refetched. Re-running after a block only touches the
       videos that are still missing. `--force` overrides.
-    * One network call per video instead of three to five.
+    * One metadata extraction and one caption request per video. Asking
+      for several caption tracks in one go (e.g. `en.*`) reliably earns an
+      HTTP 429 on the second track, so the track is chosen from the
+      metadata first and only that one is downloaded.
     * Paced by default (`--sleep-requests`, `--sleep-subtitles`, `--pause-sec`).
     * Stops the run on the first sign of a block ("Sign in to confirm
       you're not a bot", HTTP 429) instead of hammering, which only
@@ -169,7 +173,9 @@ class YtDlp:
         res = run(self.base() + args)
         combined = (res.stderr or "") + "\n" + (res.stdout or "")
         if looks_blocked(combined):
-            raise BlockedError(combined.strip()[-600:])
+            # Show the lines that actually say "blocked", not the log tail.
+            hits = [ln.strip() for ln in combined.splitlines() if looks_blocked(ln)]
+            raise BlockedError("\n".join(hits)[-600:])
         return res
 
 
@@ -272,6 +278,34 @@ def pick_caption_file(candidates: list[Path], preferred: str = "en") -> Path | N
     return sorted(candidates, key=rank)[0]
 
 
+def choose_caption_tracks(info: dict, preferred: str = "en") -> list[str]:
+    """Language keys worth downloading, best first, from yt-dlp's info dict.
+
+    Manual tracks beat auto-generated ones. Within each: the exact language,
+    then regional/named variants (`en-US`, `en-qlPKC2UN_YU`), with the auto
+    `<lang>-orig` track after plain `<lang>`. Tracks in other languages are
+    never returned — the caller falls back to Whisper instead."""
+    pref = preferred.lower()
+
+    def matching(tracks: dict) -> list[str]:
+        def rank(lang: str) -> tuple[int, str]:
+            low = lang.lower()
+            if low == pref:
+                return (0, low)
+            if low == pref + "-orig":
+                return (1, low)
+            return (2, low)
+        keys = [k for k in (tracks or {})
+                if k.lower() == pref or k.lower().startswith(pref + "-")]
+        return sorted(keys, key=rank)
+
+    ordered: list[str] = []
+    for lang in matching(info.get("subtitles")) + matching(info.get("automatic_captions")):
+        if lang not in ordered:
+            ordered.append(lang)
+    return ordered
+
+
 def _write_timestamped(
     vdir: Path,
     *,
@@ -301,35 +335,37 @@ def transcript_is_cached(vdir: Path) -> bool:
         return False
 
 
-# ── Stage 1a: one yt-dlp pass -> info.json + description + captions ──────────
+# ── Stage 1a: info.json + description, then exactly one caption track ────────
 def fetch_video_assets(
     video: dict,
     vdir: Path,
     ytdlp: YtDlp,
     *,
-    sub_langs: str = "en.*,en",
+    caption_lang: str = "en",
 ) -> dict:
-    """Fetch metadata + captions for one video in a single yt-dlp call.
+    """Fetch metadata, then the single best caption track, for one video.
+
+    Call 1 extracts metadata only. Call 2 reuses it (`--load-info-json`, so
+    no second extraction) and downloads exactly one caption track: several
+    tracks in one call get the second one rate-limited (HTTP 429), which
+    also used to lose the metadata.
 
     Writes source.info.json, source.<lang>.json3 (when captions exist),
     description.txt and metadata.json. Returns the parsed info dict (may
     be empty on failure). Raises BlockedError on a YouTube block.
 
-    Idempotent: if source.info.json already exists, nothing is fetched.
+    Idempotent: whatever is already on disk is not fetched again.
     """
     info_path = vdir / "source.info.json"
+    out_tpl = str(vdir / "source.%(ext)s")
     url = video.get("url") or f"https://www.youtube.com/watch?v={video['id']}"
 
     if not info_path.exists():
         require("yt-dlp")
-        step("Fetching metadata + captions (one yt-dlp call)...")
-        out_tpl = str(vdir / "source.%(ext)s")
+        step("Fetching metadata...")
         res = ytdlp.run([
             "--skip-download",
             "--write-info-json",
-            "--write-subs", "--write-auto-subs",
-            "--sub-langs", sub_langs,
-            "--sub-format", "json3",
             "-o", out_tpl,
             url,
         ])
@@ -342,6 +378,22 @@ def fetch_video_assets(
             info = json.loads(info_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             info = {}
+
+    if info and not list(vdir.glob("source.*.json3")):
+        tracks = choose_caption_tracks(info, caption_lang)
+        if tracks:
+            lang = tracks[0]
+            step(f"Fetching caption track [{lang}]...")
+            res = ytdlp.run([
+                "--skip-download",
+                "--load-info-json", str(info_path),
+                "--write-subs", "--write-auto-subs",
+                "--sub-langs", f"^{re.escape(lang)}$",
+                "--sub-format", "json3",
+                "-o", out_tpl,
+            ])
+            if res.returncode != 0:
+                warn(f"Caption download returned {res.returncode}: {res.stderr.strip()[-300:]}")
 
     # description.txt (chapter timestamps live here; preprocessor reads it)
     desc = info.get("description")
@@ -518,9 +570,9 @@ def get_transcript(
     May raise BlockedError (propagated to main, which stops the run)."""
     tpath = vdir / "transcript.txt"
 
-    # Path 1: YouTube captions from the single yt-dlp pass — only for real YT videos
+    # Path 1: YouTube captions via yt-dlp — only for real YT videos
     if not force_whisper and video["id"] != "local":
-        info = fetch_video_assets(video, vdir, ytdlp, sub_langs=f"{caption_lang}.*,{caption_lang}")
+        info = fetch_video_assets(video, vdir, ytdlp, caption_lang=caption_lang)
         cached = captions_from_cache(vdir, info, preferred_lang=caption_lang)
         if cached:
             text, segments, lang, source = cached

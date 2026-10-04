@@ -478,8 +478,12 @@ cloud IP ranges (AWS, GCP, Azure, CI runners, hosted notebooks) outright.
 The extractor is built to live with that rather than fight it:
 
 - **Nothing is fetched twice.** Metadata, description and the caption
-  track come from one yt-dlp call per video, and the raw files are kept
-  next to the transcript. Re-running only touches videos that are missing.
+  track come from one metadata call plus one caption request per video,
+  and the raw files are kept next to the transcript. Re-running only
+  touches videos that are missing.
+- **Only one caption track is requested.** The best track (manual before
+  auto-generated) is picked from the metadata first. Asking for every
+  English variant at once gets the second track an HTTP 429.
 - **It is paced by default.** yt-dlp sleeps 1.5 s between requests and
   2 s before each caption download, and the extractor pauses ~2 s between
   videos. Tune with `--sleep-requests`, `--sleep-subtitles`, `--pause-sec`.

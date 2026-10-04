@@ -115,8 +115,11 @@ to populate.
 - Idempotent extract: a video with `transcript.txt` + sidecar is never
   refetched (`--force` to override). PRD F1.6 was documented but not
   implemented; re-runs after a block used to re-hit every video.
-- One yt-dlp call per video (info.json + description + json3 captions)
-  replaces the description call + 2–4 `youtube-transcript-api` calls.
+- Two yt-dlp calls per video — metadata (info.json + description), then
+  exactly one json3 caption track chosen from it via `--load-info-json` —
+  replace the description call + 2–4 `youtube-transcript-api` calls. (A
+  single call asking for `en.*` was tried first; live, YouTube answers the
+  second caption track with HTTP 429 and yt-dlp then drops the metadata.)
   `youtube-transcript-api` dropped. Raw `source.*` files kept as cache.
 - Paced by default (`--sleep-requests`, `--sleep-subtitles`,
   `--pause-sec`); stops with exit code 3 on the first block signature;

@@ -42,7 +42,19 @@ class Json3Tests(unittest.TestCase):
         files.append(Path("source.en.json3"))
         self.assertEqual(ex.pick_caption_file(files).name, "source.en.json3")
         self.assertIsNone(ex.pick_caption_file([]))
+        self.assertEqual(
+            ex.pick_caption_file([Path("source.en-qlPKC2UN_YU.json3")]).name,
+            "source.en-qlPKC2UN_YU.json3")
         self.assertEqual(ex.pick_caption_file([Path("source.de.json3")]).name, "source.de.json3")
+
+    def test_choose_caption_tracks(self):
+        info = {"subtitles": {"en-qlPKC2UN_YU": [], "live_chat": [], "de": []},
+                "automatic_captions": {"en-en-qlPKC2UN_YU": [], "en-orig": [], "en": [], "fr": []}}
+        self.assertEqual(ex.choose_caption_tracks(info),
+                         ["en-qlPKC2UN_YU", "en", "en-orig", "en-en-qlPKC2UN_YU"])
+        self.assertEqual(ex.choose_caption_tracks({"automatic_captions": {"en": []}}), ["en"])
+        self.assertEqual(ex.choose_caption_tracks({"subtitles": {"de": []}}), [])
+        self.assertEqual(ex.choose_caption_tracks({"subtitles": {"de": []}}, "de"), ["de"])
 
     def test_looks_blocked(self):
         self.assertTrue(ex.looks_blocked("ERROR: Sign in to confirm you're not a bot"))
@@ -83,21 +95,34 @@ if "--flat-playlist" in args:
         print(json.dumps({"id": vid, "title": title, "url": f"https://youtu.be/{vid}"}))
     sys.exit(0)
 
-url = args[-1]
-vid = url.rsplit("/", 1)[-1]
-if vid == BLOCK_ID:
-    sys.stderr.write("ERROR: [youtube] %s: Sign in to confirm you're not a bot.\n" % vid)
-    sys.exit(1)
-
 tpl = args[args.index("-o") + 1]
 base = tpl.replace("%(ext)s", "")
-info = {"id": vid, "title": vid.upper(), "description": "00:00 Intro\n00:30 Body\n",
-        "webpage_url": url, "duration": 90, "subtitles": {"en": []}, "automatic_captions": {}}
-Path(base + "info.json").write_text(json.dumps(info))
+
+if "--load-info-json" not in args:          # call 1: metadata only
+    url = args[-1]
+    vid = url.rsplit("/", 1)[-1]
+    if vid == BLOCK_ID:
+        sys.stderr.write("ERROR: [youtube] %s: Sign in to confirm you're not a bot.\n" % vid)
+        sys.exit(1)
+    info = {"id": vid, "title": vid.upper(), "description": "00:00 Intro\n00:30 Body\n",
+            "webpage_url": url, "duration": 90,
+            "subtitles": {"en-qlPKC2UN_YU": []},
+            "automatic_captions": {"en": [], "en-orig": [], "de": []}}
+    Path(base + "info.json").write_text(json.dumps(info))
+    sys.exit(0)
+
+# call 2: exactly one caption track, from the saved metadata
+info = json.loads(Path(args[args.index("--load-info-json") + 1]).read_text())
+lang = args[args.index("--sub-langs") + 1].strip("^$").replace("\\", "")
+if info["id"] == os.environ.get("FAKE_YTDLP_SUB_BLOCK_ID", ""):
+    sys.stderr.write("ERROR: Unable to download video subtitles for %r: "
+                     "HTTP Error 429: Too Many Requests\n" % lang)
+    sys.stdout.write("[download] Sleeping 2.00 seconds ...\n" * 40)
+    sys.exit(1)
 words = " ".join(["word%d" % i for i in range(150)])
 events = [{"tStartMs": i * 1000, "dDurationMs": 900, "segs": [{"utf8": "w%d %s" % (i, words[:40])}]}
           for i in range(0, 80)]
-Path(base + "en.json3").write_text(json.dumps({"events": events}))
+Path(base + lang + ".json3").write_text(json.dumps({"events": events}))
 '''
 
 
@@ -114,6 +139,7 @@ class EndToEndTests(unittest.TestCase):
         os.environ["PATH"] = f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"
         os.environ["FAKE_YTDLP_LOG"] = str(self.log)
         os.environ.pop("FAKE_YTDLP_BLOCK_ID", None)
+        os.environ.pop("FAKE_YTDLP_SUB_BLOCK_ID", None)
         self.out = self.tmp / "out"
 
     def tearDown(self):
@@ -132,14 +158,14 @@ class EndToEndTests(unittest.TestCase):
             "--sleep-requests", "0", "--sleep-subtitles", "0", *extra,
         ])
 
-    def test_single_call_per_video_and_idempotent_rerun(self):
+    def test_one_track_per_video_and_idempotent_rerun(self):
         self.assertEqual(self._run(), 0)
         root = self.out / "demo"
         dirs = sorted(d.name for d in root.glob("video_*"))
         self.assertEqual(dirs, ["video_01_first-talk", "video_02_second-talk"])
         v1 = root / "video_01_first-talk"
         for name in ("transcript.txt", "transcript.timestamped.json", "source.info.json",
-                     "source.en.json3", "description.txt", "metadata.json"):
+                     "source.en-qlPKC2UN_YU.json3", "description.txt", "metadata.json"):
             self.assertTrue((v1 / name).exists(), name)
         meta = json.loads((v1 / "metadata.json").read_text())
         self.assertEqual(meta["url"], "https://youtu.be/aaa111")
@@ -149,23 +175,31 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue((root / "00_INDEX.md").exists())
 
         calls = self._calls()
-        # 1 enumeration + exactly 1 call per video, nothing else.
-        self.assertEqual(len(calls), 3)
+        # 1 enumeration + per video: one metadata call, one caption call.
+        self.assertEqual(len(calls), 5)
         per_video = [c for c in calls if "--flat-playlist" not in c]
         for c in per_video:
             self.assertIn("--skip-download", c)
-            self.assertIn("--write-subs", c)
-            self.assertIn("--write-auto-subs", c)
-            self.assertIn("json3", c)
             self.assertIn("--no-playlist", c)
+        meta_calls = [c for c in per_video if "--write-info-json" in c]
+        sub_calls = [c for c in per_video if "--load-info-json" in c]
+        self.assertEqual((len(meta_calls), len(sub_calls)), (2, 2))
+        for c in meta_calls:
+            self.assertNotIn("--write-subs", c)
+        for c in sub_calls:
+            # Exactly one track, the manual one, never a multi-track pattern.
+            self.assertEqual(c[c.index("--sub-langs") + 1], r"^en\-qlPKC2UN_YU$")
+            self.assertIn("json3", c)
+        self.assertEqual(sorted(p.name for p in v1.glob("source.*.json3")),
+                         ["source.en-qlPKC2UN_YU.json3"])
 
         # Second run: enumeration only. Cached videos never touch yt-dlp again.
         self.assertEqual(self._run(), 0)
-        self.assertEqual(len(self._calls()), 4)
+        self.assertEqual(len(self._calls()), 6)
 
         # --force refetches.
         self.assertEqual(self._run("--force"), 0)
-        self.assertEqual(len(self._calls()), 4 + 3)
+        self.assertEqual(len(self._calls()), 6 + 5)
 
     def test_stops_on_block_and_keeps_progress(self):
         os.environ["FAKE_YTDLP_BLOCK_ID"] = "bbb222"
@@ -177,8 +211,32 @@ class EndToEndTests(unittest.TestCase):
         os.environ.pop("FAKE_YTDLP_BLOCK_ID")
         before = len(self._calls())
         self.assertEqual(self._run(), 0)
-        self.assertEqual(len(self._calls()) - before, 2)  # enumerate + video 2
+        self.assertEqual(len(self._calls()) - before, 3)  # enumerate + video 2 (metadata, captions)
         self.assertTrue(ex.transcript_is_cached(root / "video_02_second-talk"))
+
+    def test_caption_429_stops_run_and_keeps_metadata(self):
+        os.environ["FAKE_YTDLP_SUB_BLOCK_ID"] = "bbb222"
+        self.assertEqual(self._run(), ex.EXIT_BLOCKED)
+        root = self.out / "demo"
+        v2 = root / "video_02_second-talk"
+        self.assertTrue(ex.transcript_is_cached(root / "video_01_first-talk"))
+        self.assertTrue((v2 / "source.info.json").exists())
+        self.assertFalse(ex.transcript_is_cached(v2))
+        # Resume reuses the saved metadata: enumerate + the caption call only.
+        os.environ.pop("FAKE_YTDLP_SUB_BLOCK_ID")
+        before = len(self._calls())
+        self.assertEqual(self._run(), 0)
+        self.assertEqual(len(self._calls()) - before, 2)
+        self.assertTrue(ex.transcript_is_cached(v2))
+
+    def test_blocked_error_carries_the_error_line(self):
+        y = ex.YtDlp(sleep_requests=0, sleep_subtitles=0)
+        info = self.tmp / "i.json"
+        info.write_text(json.dumps({"id": "zzz"}))
+        os.environ["FAKE_YTDLP_SUB_BLOCK_ID"] = "zzz"
+        with self.assertRaises(ex.BlockedError) as cm:
+            y.run(["--load-info-json", str(info), "--sub-langs", "^en$", "-o", str(self.tmp / "s.%(ext)s")])
+        self.assertIn("429", str(cm.exception))
 
 
 if __name__ == "__main__":
