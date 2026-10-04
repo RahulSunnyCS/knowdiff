@@ -161,6 +161,17 @@ the transcript. README "MCP server". Verified live over stdio and HTTP
 against a real extracted playlist; not yet verified through a real tunnel
 or from claude.ai.
 
+### ✓ 23. `knowledge-diff` intent (the name on the repo)
+`scripts/knowledge_diff.py` + `prompts/06_knowledge_diff.md` + MCP tools
+`get_diff_candidates` / `save_knowledge_diff`. Each distilled item is
+judged new / partial / known against the knowledge store (other
+playlists, earlier videos of the same playlist, `knowledge/syllabus.md`)
+and the not-known ones become merged, deep-linked watch ranges in
+`watchlist.md`. Judges: word overlap (CLI, free) or the connected Claude
+(MCP). Verified live through the MCP server on two real videos. Not
+built: an API-model judge for the CLI (needs a key), and marking a
+video as "watched" independently of it being distilled.
+
 ---
 
 ## Open (deferred from this batch)
@@ -178,12 +189,6 @@ key on batch ids, not just on-disk JSON.
 ### Hierarchical Phase 3
 One synthesis call caps at ~150 videos of compact JSON. Chunk + reduce
 for bigger channels.
-
-### `knowledge-diff` intent (the name on the repo)
-Segment-level claims compared against a personal knowledge store (every
-distilled JSON so far + a syllabus/progress file) → "watch these 12
-minutes of 58" with deep links. Haiku as the "is this already covered"
-judge. Not started.
 
 ### `strategy-claims` intent
 Per-video hypothesis cards (instrument, entry, exit, sizing, stated
