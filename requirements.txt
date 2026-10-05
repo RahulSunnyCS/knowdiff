@@ -15,3 +15,5 @@ yt-dlp>=2025.1.0
 # Optional — only needed for screen-heavy mode (frame dedup).
 # imagehash>=4.3.1
 # pillow>=10.0.0
+# Optional — only needed for the MCP server (scripts/mcp_server.py).
+# mcp>=2.0

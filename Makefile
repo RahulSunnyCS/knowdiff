@@ -17,7 +17,7 @@ endif
 
 .PHONY: help scope test1 extract extract-batch preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        diff-synthesis eval test clean
+        diff-synthesis eval test mcp mcp-http clean
 
 help:
 	@echo "Setup:"
@@ -46,6 +46,8 @@ help:
 	@echo "  make diff-synthesis OLD=... NEW=...     - compare two synthesis.json"
 	@echo "  make eval PLAYLIST_NAME=...             - hold-one-out scoring (leak-free rebuild)"
 	@echo "  make test                               - run the unit tests (no network, no API key)"
+	@echo "  make mcp                                - MCP server over stdio (no API key)"
+	@echo "  make mcp-http MCP_HOST=<tunnel host>    - MCP server over HTTP for a tunnel (needs KNOWDIFF_MCP_TOKEN)"
 	@echo "  make clean                              - remove output/ and distilled/"
 	@echo ""
 	@echo "Vars: PLAYLIST=<url>  PLAYLIST_NAME=<dir>  MODE={talking-head,screen-heavy}  OUT=<dir>"
@@ -112,6 +114,12 @@ eval:
 
 test:
 	python3 -m unittest discover -s tests -v
+
+mcp:
+	python3 scripts/mcp_server.py
+
+mcp-http:
+	python3 scripts/mcp_server.py --http $(if $(MCP_HOST),--allowed-host $(MCP_HOST))
 
 clean:
 	rm -rf $(OUT) distilled
