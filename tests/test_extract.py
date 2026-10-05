@@ -72,6 +72,13 @@ class Json3Tests(unittest.TestCase):
         self.assertEqual(base[base.index("--extractor-args") + 1], "youtube:player_client=tv")
         self.assertEqual(base[-2:], ["--proxy", "x"])
 
+    def test_parse_video_selection(self):
+        self.assertEqual(ex.parse_video_selection("10-12"), [10, 11, 12])
+        self.assertEqual(ex.parse_video_selection("1, 3,5-6,3"), [1, 3, 5, 6])
+        for bad in ("", "0", "5-2", "a", "1-"):
+            with self.assertRaises(ValueError, msg=bad):
+                ex.parse_video_selection(bad)
+
     def test_resolve_playlist_name(self):
         self.assertEqual(ex.resolve_playlist_name("https://x", False, "My Creator!"), "my-creator")
         self.assertEqual(ex.resolve_playlist_name("https://x", False, None), "playlist")
@@ -200,6 +207,29 @@ class EndToEndTests(unittest.TestCase):
         # --force refetches.
         self.assertEqual(self._run("--force"), 0)
         self.assertEqual(len(self._calls()), 6 + 5)
+
+    def test_videos_range_keeps_playlist_numbers(self):
+        self.assertEqual(self._run("--videos", "2"), 0)
+        root = self.out / "demo"
+        self.assertEqual(sorted(d.name for d in root.glob("video_*")), ["video_02_second-talk"])
+        self.assertIn(" 2. Second Talk", (root / "00_INDEX.md").read_text())
+        # A later full run finds video 2 cached and fetches only video 1.
+        before = len(self._calls())
+        self.assertEqual(self._run(), 0)
+        self.assertEqual(len(self._calls()) - before, 3)  # enumerate + video 1 (metadata, captions)
+        self.assertEqual(self._run("--videos", "0-1"), 2)
+        self.assertEqual(self._run("--jobs", "0"), 2)
+
+    def test_parallel_jobs_fetch_everything(self):
+        self.assertEqual(self._run("--jobs", "2"), 0)
+        root = self.out / "demo"
+        self.assertTrue(ex.transcript_is_cached(root / "video_01_first-talk"))
+        self.assertTrue(ex.transcript_is_cached(root / "video_02_second-talk"))
+        self.assertEqual(len(self._calls()), 5)
+
+    def test_parallel_jobs_stop_on_block(self):
+        os.environ["FAKE_YTDLP_BLOCK_ID"] = "aaa111"
+        self.assertEqual(self._run("--jobs", "2"), ex.EXIT_BLOCKED)
 
     def test_stops_on_block_and_keeps_progress(self):
         os.environ["FAKE_YTDLP_BLOCK_ID"] = "bbb222"
