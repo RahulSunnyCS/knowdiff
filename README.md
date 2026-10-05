@@ -100,6 +100,7 @@ You tell the tool what you want before it starts. Options:
 | `quote-mining`        | A list of verbatim quotes matching themes you specify                   | `quotes.md`                      |
 | `style-clone`         | A Skill that mimics the creator's *phrasing*, not just method           | `SKILL.md`                       |
 | `knowledge-diff`      | Only the minutes of each video that are new to *you*                    | `watchlist.md`                   |
+| `claim-cards`         | The checkable claims in each video, as quoted, deep-linked cards        | `claim_cards.md`                 |
 
 Every output (except `stats`) also produces a separate `citations.md`
 file mapping each claim back to **the exact video and timestamp** it
@@ -592,7 +593,9 @@ pip install mcp
 Tools: `list_playlists`, `list_videos`, `start_extract`, `extract_status`,
 `preprocess`, `get_transcript`, `get_prompt`, `get_distilled`,
 `save_distilled`, `save_synthesis`, `save_skill`, `quote_mine`,
-`get_diff_candidates`, `save_knowledge_diff`.
+`get_diff_candidates`, `save_knowledge_diff`, `list_card_profiles`,
+`get_card_instructions`, `save_claim_cards`, `get_claim_cards`,
+`save_card_translation`.
 `save_distilled` refuses any `ts` that is not a `[MM:SS]` marker in that
 video's transcript, so invented timestamps cannot be saved.
 
@@ -658,6 +661,48 @@ JSON per video under `distilled/<playlist>/knowledge_diff/`. A passage
 runs from an item's `[MM:SS]` marker to the next item's marker (30 s to
 3 min), and nearby passages are merged, so ranges are approximate to
 about one marker interval.
+
+---
+
+## Claim cards — the checkable claims in a video
+
+A connected Claude can pull each idea someone could act on or check out
+of a video as a *claim card*: the claim, a tag, a few subject fields, the
+creator's exact words and a deep link to where they said them. It works
+for any subject and runs through the MCP server only (no API-key script).
+
+1. `get_card_instructions(profile)` + `get_transcript` →
+   `save_claim_cards`. A card is rejected if its quote is not in the
+   transcript word for word or its timestamp is not a real marker.
+   Anything the creator did not state stays `null`.
+2. `get_claim_cards` groups cards by subject and tag across playlists,
+   so claims several creators share come first. The same view is written
+   to `distilled/claim_cards.md` (`make claim-cards` rebuilds it).
+
+**Profiles** decide what a card looks like for a subject. They are small
+JSON files under `profiles/`:
+
+| Profile | A card is… | Fields |
+| ------- | ---------- | ------ |
+| `generic` (default) | a rule, technique, recommendation, prediction, comparison or warning | `topic`, `when`, `do`, `expect`, `caveats` |
+| `trading` | a strategy that could be checked against market data | `instrument`, `entry`, `exit`, `sizing`, `regime`, `edge` |
+
+To add a subject (fitness, cooking, law, interview prep…), copy
+`profiles/generic.json`, rename it, and edit `card_is`, `tags`, `fields`
+and `cluster_by`. It shows up in `list_card_profiles` straight away.
+
+A profile may also define a **translation** step: turning a card into
+something a tool can test. `trading` does: connect the sibling
+`ai-trading-agent` repo's `option-backtesting` MCP server, follow
+`get_prompt("07_trading_translate")`, check the strategy YAML with that
+server's `validate_strategy`, then `save_card_translation`. Every rule
+the target cannot express, and every value it needed that the creator
+never gave, must be listed under `manual_review`; a translation that
+silently fills in an unstated entry, exit or sizing is rejected.
+
+Cards are creators' claims, not results. `valid` on a translation is
+what the external validator reported to the translating session;
+knowdiff records it and cannot re-check it.
 
 ---
 

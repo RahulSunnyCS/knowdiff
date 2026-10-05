@@ -32,6 +32,7 @@ VALID_INTENTS = {
     "quote-mining",
     "topical-report",
     "knowledge-diff",
+    "claim-cards",
 }
 
 
