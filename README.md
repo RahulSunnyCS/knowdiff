@@ -1,4 +1,6 @@
-# youtube-skill-fetch
+# knowdiff
+
+_(formerly `youtube-skill-fetch`)_
 
 **Turn a YouTube creator's playlist into something you can re-use.**
 
@@ -100,7 +102,8 @@ You tell the tool what you want before it starts. Options:
 
 Every output (except `stats`) also produces a separate `citations.md`
 file mapping each claim back to **the exact video and timestamp** it
-came from. The Skill or report stays clean and readable; if you want
+came from (timestamps are read off inline markers in the transcript, not
+guessed). The Skill or report stays clean and readable; if you want
 to verify a specific point, open the citations file.
 
 ---
@@ -114,8 +117,10 @@ estimates for a **10-hour playlist** (about 40 videos × 15 minutes):
 
 | Model         | Approximate cost per playlist |
 | ------------- | ----------------------------- |
-| Sonnet 4.6    | ~$1.50–2.00                   |
-| Opus 4.7      | ~$6–8                         |
+| Sonnet 5.5    | ~$1.00–1.50                   |
+| Opus 5.5      | ~$2.50–3.50                   |
+
+(Defaults use Haiku 4.5 for the per-video step, which is cheaper still.)
 
 `stats` mode is free (no Claude calls). Other modes are cheaper than
 the table above because they do less work.
@@ -139,9 +144,13 @@ pip install -r requirements.txt
 **On Linux:**
 
 ```
-sudo apt install yt-dlp ffmpeg tesseract-ocr
-pip install -r requirements.txt
+sudo apt install ffmpeg tesseract-ocr
+pip install -r requirements.txt     # installs yt-dlp too; distro packages are often too old
 ```
+
+Keep `yt-dlp` current (`pip install -U yt-dlp` or `brew upgrade yt-dlp`).
+YouTube changes its anti-bot checks often and an old yt-dlp is the most
+common cause of "Sign in to confirm you're not a bot".
 
 If a video has no captions, the tool will transcribe it with Whisper.
 Whisper is optional and installed separately. We prefer **faster-whisper**
@@ -208,9 +217,16 @@ make extract PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=myc
 ```
 
 When this finishes you'll have 40-ish `transcript.txt` files under
-`output/mycreator/`.
+`output/mycreator/`. Each video costs one metadata call and one caption
+request, and a video that is already on disk is never fetched again, so if YouTube
+blocks you halfway (exit code 3) you just wait and re-run the same
+command. See [Rate limits](#rate-limits) below before pointing it at a
+big playlist.
 
-Only want a slice? Use `VIDEOS=` for a range (1-based playlist order):
+Only want a slice? Use `VIDEOS=` for a range (1-based playlist order).
+Folders keep the playlist number — video 12 is always `video_12_*` —
+so fetching `1-10` today and `11-40` tomorrow builds one consistent
+folder, and nothing is fetched twice:
 
 ```
 make extract PLAYLIST="..." VIDEOS="1-10"        # first ten
@@ -218,12 +234,16 @@ make extract PLAYLIST="..." VIDEOS="10-25"       # videos 10 through 25
 make extract PLAYLIST="..." VIDEOS="1,3,5-7"     # cherry-pick
 ```
 
-Want it faster? Add `JOBS=N` to process videos in parallel. Safe with
-the captions-first path (IO-bound). Keep `JOBS=1` for `--force-whisper`
-or `MODE=screen-heavy` unless you have spare CPU:
+Want it faster? Add `JOBS=N` to process videos in parallel. Each worker
+is paced, so N workers send YouTube N times the requests — in testing,
+two caption requests in quick succession were already enough for an
+HTTP 429. Start at `JOBS=1` and raise it only if that is never blocked;
+on a block, every worker stops and the run exits with code 3. Keep
+`JOBS=1` for `--force-whisper` or `MODE=screen-heavy` unless you have
+spare CPU:
 
 ```
-make extract PLAYLIST="..." JOBS=4
+make extract PLAYLIST="..." JOBS=2
 ```
 
 **Step 3: clean the transcripts.** This strips filler ("um", "you
@@ -239,6 +259,12 @@ Each video now has a `transcript.clean.txt` and a `preprocess.json`
 showing what was cut. If the cuts look too aggressive, re-run with
 `--no-sponsor-detect` or `--intro-sec 10`.
 
+The cleaned transcript carries an inline `[MM:SS]` marker roughly every
+30 seconds (from the timestamped sidecar). That is what lets Claude put a
+real timestamp on every claim it extracts, so `citations.md` points at the
+actual moment in the video rather than a guess. `--marker-interval 0`
+turns them off.
+
 **Step 4: configure intent (write `scope.json`).** Until the interactive
 scoper ships, drop this file at `distilled/mycreator/scope.json`:
 
@@ -251,9 +277,9 @@ scoper ships, drop this file at `distilled/mycreator/scope.json`:
   "question": "",
   "target_audience": "personal",
   "models": {
-    "phase2": "claude-haiku-4-5-20251001",
-    "phase3": "claude-sonnet-4-6",
-    "phase4": "claude-sonnet-4-6"
+    "phase2": "claude-haiku-4-5",
+    "phase3": "claude-sonnet-5-5",
+    "phase4": "claude-sonnet-5-5"
   }
 }
 ```
@@ -268,7 +294,7 @@ python scripts/run_phase2.py --playlist mycreator
 You'll see live progress and a running total:
 
 ```
-Phase 2: model=claude-haiku-4-5-20251001, intent=method-distillation, 40 videos, concurrency=4
+Phase 2: model=claude-haiku-4-5, intent=method-distillation, 40 videos, concurrency=4
   ✓ video_01: ok (820 out tokens)  [running total: $0.0034]
   ✓ video_02: ok (760 out tokens)  [running total: $0.0067]
   ...
@@ -310,9 +336,12 @@ Projects, or the API) and it will answer in the creator's method.
 make eval PLAYLIST_NAME=mycreator
 ```
 
-Hold-one-out scoring: the last video is withheld and Claude is asked
-to predict its content using only the SKILL.md. Result lands in
-`distilled/mycreator/score.json`.
+Hold-one-out scoring, leak-free: the last video is withheld, a fresh
+synthesis and SKILL.md are rebuilt from the other N-1 videos in a scratch
+folder, and Claude is asked to predict the held-out video's content using
+only that Skill. Result lands in `distilled/mycreator/score.json` with
+`leak_free: true`. (Pass `--skill-path` to score a Skill you already have,
+but that Skill saw the held-out video, so expect an optimistic number.)
 
 ---
 
@@ -335,9 +364,9 @@ compound interest?" — without watching all 40 videos.
   "question": "What does the creator say about compound interest and long-term investing?",
   "target_audience": "personal",
   "models": {
-    "phase2": "claude-haiku-4-5-20251001",
-    "phase3": "claude-sonnet-4-6",
-    "phase4": "claude-sonnet-4-6"
+    "phase2": "claude-haiku-4-5",
+    "phase3": "claude-sonnet-5-5",
+    "phase4": "claude-sonnet-5-5"
   }
 }
 ```
@@ -505,9 +534,13 @@ After a full run you'll find:
 
 ```
 output/mycreator/                     # raw transcripts (do not share)
+  video_01_*/source.info.json         # raw yt-dlp metadata (cache; never refetched)
+  video_01_*/source.en.json3          # raw caption track (cache; never refetched)
+  video_01_*/metadata.json            # id, title, url, duration, caption languages
+  video_01_*/description.txt          # YouTube description (chapter timestamps)
   video_01_*/transcript.txt
   video_01_*/transcript.timestamped.json  # segment-level start/end for each line
-  video_01_*/transcript.clean.txt     # preprocessor output
+  video_01_*/transcript.clean.txt     # preprocessor output, with [MM:SS] markers
   video_01_*/preprocess.json          # what was removed and why
   video_01_*/screenshots/*.jpg        # frames at "look at this" moments (optional)
   video_01_*/screenshots.json         # manifest: frame -> ts + trigger + context
@@ -533,10 +566,53 @@ distilled/mycreator/                  # everything Claude touched
 
 ---
 
+## Rate limits
+
+YouTube throttles and blocks automated caption fetching, and it blocks
+cloud IP ranges (AWS, GCP, Azure, CI runners, hosted notebooks) outright.
+The extractor is built to live with that rather than fight it:
+
+- **Nothing is fetched twice.** Metadata, description and the caption
+  track come from one metadata call plus one caption request per video,
+  and the raw files are kept next to the transcript. Re-running only
+  touches videos that are missing.
+- **Only one caption track is requested.** The best track (manual before
+  auto-generated) is picked from the metadata first. Asking for every
+  English variant at once gets the second track an HTTP 429.
+- **It is paced by default.** yt-dlp sleeps 1.5 s between requests and
+  2 s before each caption download, and the extractor pauses ~2 s between
+  videos. Tune with `--sleep-requests`, `--sleep-subtitles`, `--pause-sec`.
+- **It stops at the first block** ("Sign in to confirm you're not a bot",
+  HTTP 429) with exit code 3 instead of hammering, which only extends the
+  block. Progress is saved. Wait 30–60 minutes and re-run the same
+  command.
+
+If blocks keep happening, in this order:
+
+1. Update yt-dlp.
+2. Run from a home or office connection, not a cloud box. A laptop on a
+   nightly schedule is the cheapest reliable setup; sync only the small
+   `output/` text files to wherever you run Phases 2–4.
+3. Carry a real identity: `--cookies-from-browser chrome` (a profile
+   signed in to YouTube) and/or
+   `--extractor-args "youtube:player_client=tv,web_safari"`. If still
+   walled, add a proof-of-origin token provider plugin for yt-dlp; see
+   its wiki.
+4. A rotating residential proxy via `--yt-dlp-args "--proxy http://..."`
+   is the paid last resort.
+5. Whisper on downloaded audio is a fallback for videos **without**
+   captions, not a way around the block: audio downloads hit the same
+   wall.
+
+Cookies tie the activity to your account. The rights rules above apply
+unchanged.
+
 ## Project documents
 
 - [`docs/PRD.md`](docs/PRD.md) — product requirements: every phase, every
   output, cost model, compliance notes. Start here if you want the full picture.
+- `make test` — unit tests (no network, no API key; the extractor is tested
+  against a fake yt-dlp).
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute.
 - [`SECURITY.md`](SECURITY.md) — how to report a security issue privately.
 - [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) — community standards.

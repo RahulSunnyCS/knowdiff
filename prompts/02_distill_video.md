@@ -44,8 +44,10 @@ Rules:
   return an empty list.
 - `ev`/`ex` must be grounded in the transcript — short quote or tight
   paraphrase. No invention.
-- `ts` is a best-effort MM:SS timestamp from the transcript. If the
-  transcript has no timestamps, use `""`.
+- `ts`: the transcript carries inline `[MM:SS]` markers roughly every
+  30 seconds. Set `ts` to the nearest marker at or before the passage the
+  item comes from (copy it without the brackets). If the transcript has
+  no markers, use `""`. Never invent a timestamp.
 - Use the short keys exactly. Do NOT expand them to verbose names.
 - If the transcript is too short or off-topic, return the JSON with empty
   lists rather than hallucinating.

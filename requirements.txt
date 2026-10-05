@@ -1,5 +1,9 @@
-yt-dlp>=2024.0.0
-youtube-transcript-api>=0.6.0
+yt-dlp>=2025.1.0
+# Captions, metadata and descriptions all come from a single yt-dlp call per
+# video (json3 caption tracks). youtube-transcript-api is no longer used: it
+# hits the caption endpoint YouTube tightened in 2025 and cannot carry cookies
+# or a proof-of-origin token the way yt-dlp can.
+#
 # Optional — only needed when YouTube captions are missing and Whisper must
 # transcribe the audio. faster-whisper is preferred (4x faster, half the memory,
 # same model weights). openai-whisper works as a fallback.
@@ -8,8 +12,6 @@ youtube-transcript-api>=0.6.0
 # Optional — only needed when running phases 2-4 via the SDK orchestrator
 # (scripts/run_phase2.py, etc.). Copy-paste workflow does not require it.
 # anthropic>=0.40.0
-# Optional — only needed when YouTube captions are absent and Whisper must transcribe.
-# openai-whisper>=20231117
 # Optional — only needed for screen-heavy mode (frame dedup).
 # imagehash>=4.3.1
 # pillow>=10.0.0

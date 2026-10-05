@@ -66,11 +66,16 @@ jobs:
           import importlib.util, sys
           from pathlib import Path
 
+          # Scripts import each other as top-level modules (`import scope`),
+          # and dataclasses under `from __future__ import annotations` need
+          # the module registered in sys.modules while the class body runs.
+          sys.path.insert(0, str(Path("scripts").resolve()))
           fails = []
           for p in sorted(Path("scripts").glob("*.py")):
               spec = importlib.util.spec_from_file_location(p.stem, p)
               try:
                   mod = importlib.util.module_from_spec(spec)
+                  sys.modules[p.stem] = mod
                   spec.loader.exec_module(mod)
               except SystemExit:
                   pass  # argparse-driven scripts that call sys.exit on import
@@ -82,6 +87,10 @@ jobs:
                   print(f"  - {f}")
               sys.exit(1)
           PY
+
+      - name: Unit tests (no network, no API key)
+        run: |
+          python -m unittest discover -s tests -v
 
   markdown-links:
     name: Markdown link check

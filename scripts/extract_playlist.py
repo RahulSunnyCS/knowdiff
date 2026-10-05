@@ -9,8 +9,9 @@ into a Claude Skill.
 EVERYTHING here runs locally and FREE. No API calls. No paid services.
 
 Pipeline per video:
-    1. Get transcript  -> YouTube captions FIRST (free, instant)
-                          -> Whisper fallback only if no captions
+    1. Two yt-dlp calls -> info JSON + description, then exactly ONE caption
+                           track (json3) picked from that metadata
+                           (captions first; Whisper fallback only if none)
     2. (optional) Scene-frame extraction for screen-heavy creators
     3. (optional) OCR frames -> on-screen code/text becomes plain text
     4. Write clean, numbered files ready to paste into Claude Pro chat
@@ -19,49 +20,66 @@ Output layout:
     output/<playlist_name>/
         00_INDEX.md                  <- overview + paste instructions
         video_01_<slug>/
-            transcript.txt
+            source.info.json         <- raw yt-dlp metadata (cache, never refetched)
+            source.<lang>.json3      <- raw caption track (cache, never refetched)
+            metadata.json            <- id / title / url / duration / caption source
+            description.txt          <- video description (chapter timestamps live here)
+            transcript.txt           <- flat text
+            transcript.timestamped.json  <- segment-level start/end for each line
             frames/ scene_001.jpg ...
             ocr.txt                  <- text pulled off the frames
         video_02_<slug>/
             ...
 
+Rate-limit posture (see README "Rate limits"):
+    * Idempotent: a video whose transcript + timestamped sidecar already
+      exist is never refetched. Re-running after a block only touches the
+      videos that are still missing. `--force` overrides.
+    * One metadata extraction and one caption request per video. Asking
+      for several caption tracks in one go (e.g. `en.*`) reliably earns an
+      HTTP 429 on the second track, so the track is chosen from the
+      metadata first and only that one is downloaded.
+    * Paced by default (`--sleep-requests`, `--sleep-subtitles`, `--pause-sec`).
+    * Stops the run on the first sign of a block ("Sign in to confirm
+      you're not a bot", HTTP 429) instead of hammering, which only
+      extends the block. Exit code 3 means "blocked; resume later".
+    * `--cookies-from-browser`, `--extractor-args` and `--yt-dlp-args`
+      pass straight through to yt-dlp.
+
 ------------------------------------------------------------------------
-SETUP (one time, on your Mac):
-    brew install yt-dlp ffmpeg tesseract
-    pip install openai-whisper youtube-transcript-api imagehash pillow
-    # (whisper + transcript-api are only needed for the transcript step;
-    #  imagehash + pillow only for frame dedup)
+SETUP (one time):
+    brew install yt-dlp ffmpeg tesseract        # macOS
+    pip install faster-whisper imagehash pillow # optional extras
 ------------------------------------------------------------------------
 
 USAGE:
     # Talking-head creator (transcript only, cheapest/fastest):
-    python extract_playlist.py <PLAYLIST_URL> --mode talking-head
+    python extract_playlist.py <PLAYLIST_URL> --playlist-name mycreator --mode talking-head
 
     # Screen-heavy creator (transcript + scene frames + OCR):
-    python extract_playlist.py <PLAYLIST_URL> --mode screen-heavy
+    python extract_playlist.py <PLAYLIST_URL> --playlist-name mycreator --mode screen-heavy
 
     # A single video:
-    python extract_playlist.py <VIDEO_URL> --mode screen-heavy
+    python extract_playlist.py <VIDEO_URL> --playlist-name mycreator
 
     # A local file you already have:
     python extract_playlist.py /path/to/video.mp4 --local --mode screen-heavy
-
-OPTIONS:
-    --mode {talking-head, screen-heavy}   default: talking-head
-    --whisper-model {tiny,base,small,medium}   default: base
-    --scene-threshold FLOAT   default: 0.4 (lower=more frames; tune per creator)
-    --max-videos INT          cap how many playlist items to process
-    --out DIR                 output root (default: ./output)
 """
+
+from __future__ import annotations
 
 import argparse
 import json
-import os
+import random
 import re
+import shlex
 import shutil
 import subprocess
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # ── Pretty console ────────────────────────────────────────────────────────────
@@ -74,6 +92,11 @@ def step(msg):                say(f"  → {msg}", "dim")
 def ok(msg):                  say(f"  ✓ {msg}", "green")
 def warn(msg):                say(f"  ! {msg}", "yellow")
 def err(msg):                 say(f"  ✗ {msg}", "red")
+
+
+# Exit code for "YouTube blocked us; nothing is wrong with the pipeline,
+# resume later". Distinct from 1 (real failure) so wrappers can tell.
+EXIT_BLOCKED = 3
 
 
 # ── Tool availability ───────────────────────────────────────────────────────
@@ -94,6 +117,68 @@ def slugify(text: str, maxlen: int = 40) -> str:
 
 def run(cmd: list, capture=True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=capture, text=True)
+
+
+# ── yt-dlp wrapper: pacing, identity, block detection ─────────────────────────
+
+# Substrings (lower-cased) in yt-dlp output that mean "YouTube is refusing
+# us", as opposed to "this one video is broken". Any of these stops the run.
+BLOCK_SIGNATURES = (
+    "sign in to confirm",
+    "confirm you're not a bot",
+    "confirm you’re not a bot",
+    "http error 429",
+    "too many requests",
+    "rate-limited",
+    "rate limited",
+    "requests from your ip",
+)
+
+
+class BlockedError(RuntimeError):
+    """Raised when yt-dlp output looks like a YouTube block / rate limit."""
+
+
+def looks_blocked(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(sig in lowered for sig in BLOCK_SIGNATURES)
+
+
+@dataclass
+class YtDlp:
+    """Builds every yt-dlp invocation with the same pacing + identity flags."""
+    sleep_requests: float = 1.5
+    sleep_subtitles: float = 2.0
+    cookies_from_browser: str | None = None
+    cookies_file: str | None = None
+    extractor_args: str | None = None
+    extra_args: list[str] = field(default_factory=list)
+    binary: str = "yt-dlp"
+
+    def base(self) -> list[str]:
+        cmd = [self.binary, "--no-progress", "--no-playlist"]
+        if self.sleep_requests > 0:
+            cmd += ["--sleep-requests", str(self.sleep_requests)]
+        if self.sleep_subtitles > 0:
+            cmd += ["--sleep-subtitles", str(self.sleep_subtitles)]
+        if self.cookies_from_browser:
+            cmd += ["--cookies-from-browser", self.cookies_from_browser]
+        if self.cookies_file:
+            cmd += ["--cookies", self.cookies_file]
+        if self.extractor_args:
+            cmd += ["--extractor-args", self.extractor_args]
+        cmd += list(self.extra_args)
+        return cmd
+
+    def run(self, args: list[str]) -> subprocess.CompletedProcess:
+        """Run yt-dlp; raise BlockedError if the output looks like a block."""
+        res = run(self.base() + args)
+        combined = (res.stderr or "") + "\n" + (res.stdout or "")
+        if looks_blocked(combined):
+            # Show the lines that actually say "blocked", not the log tail.
+            hits = [ln.strip() for ln in combined.splitlines() if looks_blocked(ln)]
+            raise BlockedError("\n".join(hits)[-600:])
+        return res
 
 
 def parse_video_selection(spec: str) -> list[int]:
@@ -130,16 +215,23 @@ def enumerate_videos(
     max_videos: int | None,
     selection: list[int] | None = None,
 ):
-    """Return list of dicts: {id, title, url} (or local file entry)."""
+    """Return list of dicts: {id, title, url, index} (or local file entry).
+
+    `index` is the video's 1-based position in the whole playlist, so a
+    video keeps the same output folder whichever --videos range fetched
+    it (and the cache recognises it on the next run).
+    """
     if is_local:
         title = Path(source).stem
-        return [{"id": "local", "title": title, "url": source, "local_path": source}]
+        return [{"id": "local", "title": title, "url": source, "local_path": source, "index": 1}]
 
     require("yt-dlp")
     step("Enumerating playlist via yt-dlp...")
-    # --flat-playlist is fast: metadata only, no download
+    # --flat-playlist is fast: metadata only, no download. One request.
     res = run(["yt-dlp", "--flat-playlist", "--dump-json", source])
     if res.returncode != 0:
+        if looks_blocked(res.stderr):
+            raise BlockedError(res.stderr.strip()[-600:])
         err(f"yt-dlp failed:\n{res.stderr.strip()[:400]}")
         sys.exit(1)
 
@@ -156,6 +248,7 @@ def enumerate_videos(
             "id": vid,
             "title": j.get("title") or vid,
             "url": j.get("url") or f"https://youtu.be/{vid}",
+            "index": len(videos) + 1,
         })
     total = len(videos)
     if selection:
@@ -184,54 +277,85 @@ _NOISE_BRACKETS_RE = re.compile(
 )
 
 
-def _fetch_captions(video_id: str) -> tuple[str, list[dict], str] | None:
-    """Fetch English captions if available; fall back to default track.
+# ── Captions: json3 parsing ───────────────────────────────────────────────────
+def parse_json3(text: str) -> list[dict]:
+    """Turn a YouTube json3 caption track into [{start, end, text}, ...].
 
-    Returns (cleaned_text, segments, language) or None if nothing usable.
-    `segments` is a list of {"start": float, "end": float, "text": str}.
+    json3 is a list of `events`, each with `tStartMs`, `dDurationMs` and a
+    list of `segs` carrying `utf8` fragments. Events without `segs` are
+    window/positioning records and carry no speech. Works for both manual
+    and auto-generated tracks.
     """
-    from youtube_transcript_api import YouTubeTranscriptApi
-    api = YouTubeTranscriptApi()
-
-    fetched = None
-    language = "unknown"
-    try:
-        listing = api.list(video_id)
-        try:
-            track = listing.find_manually_created_transcript(["en", "en-US", "en-GB"])
-        except Exception:
-            try:
-                track = listing.find_generated_transcript(["en", "en-US", "en-GB"])
-            except Exception:
-                track = None
-        if track is not None:
-            language = getattr(track, "language_code", "en")
-            fetched = track.fetch()
-    except Exception:
-        pass
-
-    if fetched is None:
-        fetched = api.fetch(video_id)  # default track, whatever language
-
+    data = json.loads(text)
     segments: list[dict] = []
-    for s in fetched:
-        # youtube_transcript_api exposes start (float seconds) and duration.
-        start = float(getattr(s, "start", 0.0))
-        dur = float(getattr(s, "duration", 0.0))
-        text = (s.text or "").strip()
-        if not text:
+    for ev in data.get("events", []) or []:
+        segs = ev.get("segs")
+        if not segs:
             continue
-        # Apply the same [Music]-style strip we do to the flat text.
-        text = _NOISE_BRACKETS_RE.sub("", text).strip()
-        if not text:
+        joined = "".join((s.get("utf8") or "") for s in segs)
+        joined = joined.replace("\n", " ")
+        joined = _NOISE_BRACKETS_RE.sub("", joined)
+        joined = re.sub(r"\s+", " ", joined).strip()
+        if not joined:
             continue
-        segments.append({"start": start, "end": start + dur, "text": text})
+        start = float(ev.get("tStartMs", 0)) / 1000.0
+        dur = float(ev.get("dDurationMs", 0) or 0) / 1000.0
+        segments.append({"start": start, "end": start + dur, "text": joined})
+    return segments
 
-    raw = " ".join(seg["text"] for seg in segments)
-    cleaned = re.sub(r"\s+", " ", raw).strip()
-    if not cleaned:
+
+def _caption_lang_from_name(path: Path) -> str:
+    # source.en.json3 -> "en"; source.en-US.json3 -> "en-US"
+    parts = path.name.split(".")
+    return parts[1] if len(parts) >= 3 else "unknown"
+
+
+def pick_caption_file(candidates: list[Path], preferred: str = "en") -> Path | None:
+    """Prefer the exact preferred language, then regional variants, then
+    anything starting with it, then anything at all."""
+    if not candidates:
         return None
-    return cleaned, segments, language
+    pref = preferred.lower()
+    def rank(p: Path) -> tuple[int, str]:
+        lang = _caption_lang_from_name(p).lower()
+        if lang == pref:
+            return (0, lang)
+        if lang.endswith("-orig"):          # auto "original audio" track: last resort in-language
+            return (2, lang)
+        if lang.startswith(pref + "-"):
+            return (1, lang)
+        if lang.startswith(pref):
+            return (2, lang)
+        return (3, lang)
+    return sorted(candidates, key=rank)[0]
+
+
+def choose_caption_tracks(info: dict, preferred: str = "en") -> list[str]:
+    """Language keys worth downloading, best first, from yt-dlp's info dict.
+
+    Manual tracks beat auto-generated ones. Within each: the exact language,
+    then regional/named variants (`en-US`, `en-qlPKC2UN_YU`), with the auto
+    `<lang>-orig` track after plain `<lang>`. Tracks in other languages are
+    never returned — the caller falls back to Whisper instead."""
+    pref = preferred.lower()
+
+    def matching(tracks: dict) -> list[str]:
+        def rank(lang: str) -> tuple[int, str]:
+            low = lang.lower()
+            if low == pref:
+                return (0, low)
+            if low == pref + "-orig":
+                return (1, low)
+            return (2, low)
+        keys = [k for k in (tracks or {})
+                if k.lower() == pref or k.lower().startswith(pref + "-")]
+        return sorted(keys, key=rank)
+
+    ordered: list[str] = []
+    for lang in matching(info.get("subtitles")) + matching(info.get("automatic_captions")):
+        if lang not in ordered:
+            ordered.append(lang)
+    return ordered
 
 
 def _write_timestamped(
@@ -242,7 +366,6 @@ def _write_timestamped(
     segments: list[dict],
 ) -> None:
     """Persist transcript.timestamped.json alongside transcript.txt."""
-    import json
     payload = {
         "source": source,
         "language": language,
@@ -254,24 +377,120 @@ def _write_timestamped(
     )
 
 
-def _save_description(video: dict, vdir: Path) -> None:
-    """Fetch the video description via yt-dlp and write description.txt.
+def transcript_is_cached(vdir: Path) -> bool:
+    """True when both transcript artifacts exist and are non-empty."""
+    t = vdir / "transcript.txt"
+    s = vdir / "transcript.timestamped.json"
+    try:
+        return t.exists() and s.exists() and t.stat().st_size > 0 and s.stat().st_size > 0
+    except OSError:
+        return False
 
-    Best-effort: failures are silently skipped (descriptions are nice-to-have
-    for chapter parsing, not required).
+
+# ── Stage 1a: info.json + description, then exactly one caption track ────────
+def fetch_video_assets(
+    video: dict,
+    vdir: Path,
+    ytdlp: YtDlp,
+    *,
+    caption_lang: str = "en",
+) -> dict:
+    """Fetch metadata, then the single best caption track, for one video.
+
+    Call 1 extracts metadata only. Call 2 reuses it (`--load-info-json`, so
+    no second extraction) and downloads exactly one caption track: several
+    tracks in one call get the second one rate-limited (HTTP 429), which
+    also used to lose the metadata.
+
+    Writes source.info.json, source.<lang>.json3 (when captions exist),
+    description.txt and metadata.json. Returns the parsed info dict (may
+    be empty on failure). Raises BlockedError on a YouTube block.
+
+    Idempotent: whatever is already on disk is not fetched again.
     """
-    target = vdir / "description.txt"
-    if target.exists():
-        return
+    info_path = vdir / "source.info.json"
+    out_tpl = str(vdir / "source.%(ext)s")
     url = video.get("url") or f"https://www.youtube.com/watch?v={video['id']}"
-    res = run(["yt-dlp", "--skip-download", "--get-description", url])
-    if res.returncode == 0 and res.stdout.strip():
+
+    if not info_path.exists():
+        require("yt-dlp")
+        step("Fetching metadata...")
+        res = ytdlp.run([
+            "--skip-download",
+            "--write-info-json",
+            "-o", out_tpl,
+            url,
+        ])
+        if res.returncode != 0 and not info_path.exists():
+            warn(f"yt-dlp returned {res.returncode}: {res.stderr.strip()[-300:]}")
+
+    info: dict = {}
+    if info_path.exists():
         try:
-            target.write_text(res.stdout, encoding="utf-8")
-        except OSError:
-            pass
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            info = {}
+
+    if info and not list(vdir.glob("source.*.json3")):
+        tracks = choose_caption_tracks(info, caption_lang)
+        if tracks:
+            lang = tracks[0]
+            step(f"Fetching caption track [{lang}]...")
+            res = ytdlp.run([
+                "--skip-download",
+                "--load-info-json", str(info_path),
+                "--write-subs", "--write-auto-subs",
+                "--sub-langs", f"^{re.escape(lang)}$",
+                "--sub-format", "json3",
+                "-o", out_tpl,
+            ])
+            if res.returncode != 0:
+                warn(f"Caption download returned {res.returncode}: {res.stderr.strip()[-300:]}")
+
+    # description.txt (chapter timestamps live here; preprocessor reads it)
+    desc = info.get("description")
+    if desc and not (vdir / "description.txt").exists():
+        (vdir / "description.txt").write_text(desc, encoding="utf-8")
+
+    # metadata.json — capture_screenshots.py reads `url` from here
+    meta_path = vdir / "metadata.json"
+    if not meta_path.exists():
+        meta = {
+            "id": info.get("id") or video.get("id"),
+            "title": info.get("title") or video.get("title"),
+            "url": info.get("webpage_url") or url,
+            "duration": info.get("duration"),
+            "uploader": info.get("uploader") or info.get("channel"),
+            "upload_date": info.get("upload_date"),
+            "manual_sub_langs": sorted((info.get("subtitles") or {}).keys()),
+            "auto_sub_langs": sorted((info.get("automatic_captions") or {}).keys()),
+        }
+        meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    return info
 
 
+def captions_from_cache(vdir: Path, info: dict, preferred_lang: str = "en") -> tuple[str, list[dict], str, str] | None:
+    """Read the cached json3 track. Returns (text, segments, language, source)
+    or None when no usable track is on disk."""
+    files = sorted(vdir.glob("source.*.json3"))
+    chosen = pick_caption_file(files, preferred=preferred_lang)
+    if chosen is None:
+        return None
+    try:
+        segments = parse_json3(chosen.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as e:
+        warn(f"Could not parse {chosen.name}: {type(e).__name__}")
+        return None
+    if not segments:
+        return None
+    lang = _caption_lang_from_name(chosen)
+    manual = lang in (info.get("subtitles") or {})
+    source = "youtube_captions" if manual else "youtube_auto_captions"
+    text = re.sub(r"\s+", " ", " ".join(s["text"] for s in segments)).strip()
+    return text, segments, lang, source
+
+
+# ── Whisper backends ──────────────────────────────────────────────────────────
 def _is_apple_silicon() -> bool:
     import platform
     return platform.system() == "Darwin" and platform.machine() in {"arm64", "aarch64"}
@@ -391,53 +610,58 @@ def get_transcript(
     video: dict,
     vdir: Path,
     whisper_model: str,
+    ytdlp: YtDlp,
     *,
     min_caption_words: int = 100,
     force_whisper: bool = False,
     language: str | None = None,
+    caption_lang: str = "en",
 ) -> bool:
-    """Write transcript.txt. Return True on success."""
+    """Write transcript.txt + transcript.timestamped.json. Return True on success.
+
+    May raise BlockedError (propagated to main, which stops the run)."""
     tpath = vdir / "transcript.txt"
 
-    # Path 1: YouTube captions (free, instant) — only for real YT videos
+    # Path 1: YouTube captions via yt-dlp — only for real YT videos
     if not force_whisper and video["id"] != "local":
-        try:
-            captions = _fetch_captions(video["id"])
-            if captions:
-                text, segments, language = captions
-                word_count = len(text.split())
-                if word_count < min_caption_words:
-                    warn(f"Captions only {word_count} words "
-                         f"(below --min-caption-words={min_caption_words}); "
-                         f"falling back to Whisper.")
-                else:
-                    tpath.write_text(text, encoding="utf-8")
-                    _write_timestamped(
-                        vdir, source="youtube_captions",
-                        language=language, segments=segments,
-                    )
-                    ok(f"Transcript via YouTube captions ({word_count:,} words) — FREE")
-                    return True
-        except Exception as e:
-            warn(f"No captions ({type(e).__name__}); falling back to Whisper.")
+        info = fetch_video_assets(video, vdir, ytdlp, caption_lang=caption_lang)
+        cached = captions_from_cache(vdir, info, preferred_lang=caption_lang)
+        if cached:
+            text, segments, lang, source = cached
+            word_count = len(text.split())
+            if word_count < min_caption_words:
+                warn(f"Captions only {word_count} words "
+                     f"(below --min-caption-words={min_caption_words}); "
+                     f"falling back to Whisper.")
+            else:
+                tpath.write_text(text, encoding="utf-8")
+                _write_timestamped(vdir, source=source, language=lang, segments=segments)
+                kind = "manual" if source == "youtube_captions" else "auto"
+                ok(f"Transcript via YouTube {kind} captions [{lang}] ({word_count:,} words) — FREE")
+                return True
+        else:
+            warn("No caption track available; falling back to Whisper.")
 
     # Path 2: Whisper fallback (free, local, slower)
     # Need a media file. For YT video without captions, download audio first.
     media = video.get("local_path")
     if media is None:
-        require("yt-dlp")
-        step("Downloading audio for Whisper...")
-        audio_out = str(vdir / "audio.%(ext)s")
-        res = run(["yt-dlp", "-x", "--audio-format", "wav",
-                   "-o", audio_out, video["url"]])
-        if res.returncode != 0:
-            err("Audio download failed.")
-            return False
         cand = list(vdir.glob("audio.*"))
-        media = str(cand[0]) if cand else None
-        if not media:
-            err("Audio file not found after download.")
-            return False
+        if cand:
+            media = str(cand[0])
+        else:
+            require("yt-dlp")
+            step("Downloading audio for Whisper...")
+            audio_out = str(vdir / "audio.%(ext)s")
+            res = ytdlp.run(["-x", "--audio-format", "wav", "-o", audio_out, video["url"]])
+            if res.returncode != 0:
+                err(f"Audio download failed: {res.stderr.strip()[-300:]}")
+                return False
+            cand = list(vdir.glob("audio.*"))
+            media = str(cand[0]) if cand else None
+            if not media:
+                err("Audio file not found after download.")
+                return False
 
     if not has("ffmpeg"):
         require("ffmpeg")
@@ -554,19 +778,27 @@ def write_index(root: Path, playlist_name: str, videos: list, mode: str):
         "## Videos",
         "",
     ]
-    for i, v in enumerate(videos, 1):
-        lines.append(f"{i:>2}. {v['title']}")
+    for v in videos:
+        lines.append(f"{v['index']:>2}. {v['title']}")
     (root / "00_INDEX.md").write_text("\n".join(lines), encoding="utf-8")
 
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-def main():
+def resolve_playlist_name(source: str, is_local: bool, explicit: str | None) -> str:
+    if explicit:
+        return slugify(explicit)
+    return slugify(Path(source).stem if is_local else "playlist")
+
+
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Local-first playlist extractor for YouTuber-skill distillation.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("source", help="Playlist URL, video URL, or local file path")
     p.add_argument("--local", action="store_true", help="Source is a local file")
+    p.add_argument("--playlist-name", default=None,
+                   help="Output folder name under --out (default: 'playlist', or the "
+                        "file stem for --local). Match PLAYLIST_NAME used by later phases.")
     p.add_argument("--mode", choices=["talking-head", "screen-heavy"],
                    default="talking-head")
     p.add_argument("--whisper-model", default="base",
@@ -577,13 +809,16 @@ def main():
                         "further trim, or use --videos alone for ranges.")
     p.add_argument("--videos", default=None,
                    help="Select specific 1-based indices: '10-25', '5', or "
-                        "'1,3,5-7'. Applied to the playlist order.")
+                        "'1,3,5-7'. Applied to the playlist order; folders keep "
+                        "the playlist number (video 12 is always video_12_*).")
     p.add_argument("--jobs", type=int, default=1,
-                   help="Process this many videos concurrently. Safe with "
-                        "captions-first extraction (IO-bound); for "
-                        "screen-heavy or --force-whisper, keep at 1 unless "
-                        "you have spare CPU. Default: 1.")
+                   help="Process this many videos concurrently. Each worker is "
+                        "paced, so N workers send N times the requests: raise it "
+                        "only if 1 never gets blocked. All workers stop on the "
+                        "first block. Default: 1.")
     p.add_argument("--out", default="output")
+    p.add_argument("--force", action="store_true",
+                   help="Refetch even when a transcript is already cached.")
     p.add_argument("--min-caption-words", type=int, default=100,
                    help="If YouTube captions produce fewer than this many words, "
                         "fall back to Whisper. Set to 0 to always trust captions.")
@@ -592,12 +827,47 @@ def main():
     p.add_argument("--whisper-language", default=None,
                    help="ISO 639-1 language code passed to the Whisper backend "
                         "(e.g. 'en'). If omitted, the backend auto-detects.")
-    p.add_argument("--no-description", action="store_true",
-                   help="Skip writing description.txt per video.")
-    args = p.parse_args()
+    p.add_argument("--caption-lang", default="en",
+                   help="Preferred caption language (ISO 639-1). Regional variants "
+                        "and auto-captions in that language are accepted too.")
+    # Rate-limit posture
+    p.add_argument("--sleep-requests", type=float, default=1.5,
+                   help="Seconds yt-dlp sleeps between data-extraction requests.")
+    p.add_argument("--sleep-subtitles", type=float, default=2.0,
+                   help="Seconds yt-dlp sleeps before each subtitle download.")
+    p.add_argument("--pause-sec", type=float, default=2.0,
+                   help="Seconds to pause between videos that hit the network "
+                        "(plus up to 1s jitter). Cached videos do not pause.")
+    p.add_argument("--cookies-from-browser", default=None,
+                   help="Passed to yt-dlp, e.g. 'chrome' or 'firefox:default'. "
+                        "Use a profile that is signed in to YouTube.")
+    p.add_argument("--cookies", default=None,
+                   help="Passed to yt-dlp: path to a Netscape cookies.txt.")
+    p.add_argument("--extractor-args", default=None,
+                   help="Passed to yt-dlp, e.g. 'youtube:player_client=tv,web_safari'.")
+    p.add_argument("--yt-dlp-args", default="",
+                   help="Any extra raw yt-dlp flags, shell-quoted as one string.")
+    return p
+
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
 
     say(f"\n{C['bold']}{C['cyan']}━━━ Local Playlist Extractor ━━━{C['reset']}")
     say(f"{C['dim']}Mode: {args.mode}  |  Source: {args.source}{C['reset']}\n")
+
+    ytdlp = YtDlp(
+        sleep_requests=args.sleep_requests,
+        sleep_subtitles=args.sleep_subtitles,
+        cookies_from_browser=args.cookies_from_browser,
+        cookies_file=args.cookies,
+        extractor_args=args.extractor_args,
+        extra_args=shlex.split(args.yt_dlp_args) if args.yt_dlp_args else [],
+    )
+
+    playlist_name = resolve_playlist_name(args.source, args.local, args.playlist_name)
+    root = Path(args.out) / playlist_name
 
     selection: list[int] | None = None
     if args.videos:
@@ -605,54 +875,92 @@ def main():
             selection = parse_video_selection(args.videos)
         except ValueError as e:
             err(f"--videos: {e}")
-            sys.exit(2)
-
+            return 2
     if args.jobs < 1:
         err("--jobs must be >= 1")
-        sys.exit(2)
+        return 2
 
-    videos = enumerate_videos(args.source, args.local, args.max_videos, selection)
+    try:
+        videos = enumerate_videos(args.source, args.local, args.max_videos, selection)
+    except BlockedError as e:
+        err("YouTube blocked the playlist listing. Nothing was written.")
+        say(f"{C['dim']}{e}{C['reset']}")
+        return EXIT_BLOCKED
     if not videos:
         err("No videos to process.")
-        sys.exit(1)
+        return 1
 
-    playlist_name = slugify(
-        Path(args.source).stem if args.local else "playlist"
-    )
-    root = Path(args.out) / playlist_name
     root.mkdir(parents=True, exist_ok=True)
 
-    def process_one(i: int, v: dict) -> None:
-        say(f"\n{C['bold']}[{i}/{len(videos)}] {v['title']}{C['reset']}")
-        vdir = root / f"video_{i:02d}_{slugify(v['title'])}"
-        vdir.mkdir(exist_ok=True)
+    # Shared by the workers. `stop` is set on the first block so every
+    # worker finishes its current video and starts no new one.
+    stop = threading.Event()
+    lock = threading.Lock()
+    tally = {"done": 0, "cached": 0, "failed": 0}
+    blocked: list[str] = []
 
-        # 0. description (cheap, enables chapter-aware preprocessing)
-        if not args.no_description and v["id"] != "local":
-            _save_description(v, vdir)
+    def count(key: str) -> None:
+        with lock:
+            tally[key] += 1
 
-        # 1. transcript
-        if not get_transcript(
-            v, vdir, args.whisper_model,
-            min_caption_words=args.min_caption_words,
-            force_whisper=args.force_whisper,
-            language=args.whisper_language,
-        ):
-            warn("Skipping video (no transcript).")
+    def on_block(vdir: Path, message: str, e: BlockedError) -> None:
+        stop.set()
+        with lock:
+            blocked.append(vdir.name)
+        err(message)
+        say(f"{C['dim']}{e}{C['reset']}")
+
+    def process_one(pos: int, v: dict) -> None:
+        if stop.is_set():
             return
+        say(f"\n{C['bold']}[{pos}/{len(videos)}] {v['title']}{C['reset']}")
+        vdir = root / f"video_{v['index']:02d}_{slugify(v['title'])}"
+        vdir.mkdir(exist_ok=True)
+        touched_network = False
+
+        # 1. transcript (idempotent)
+        if transcript_is_cached(vdir) and not args.force:
+            ok("Transcript cached — skipping fetch (use --force to refetch).")
+            count("cached")
+        else:
+            if args.force:
+                for stale in ("source.info.json", "transcript.txt", "transcript.timestamped.json"):
+                    (vdir / stale).unlink(missing_ok=True)
+                for stale in vdir.glob("source.*.json3"):
+                    stale.unlink(missing_ok=True)
+            touched_network = v["id"] != "local"
+            try:
+                got = get_transcript(
+                    v, vdir, args.whisper_model, ytdlp,
+                    min_caption_words=args.min_caption_words,
+                    force_whisper=args.force_whisper,
+                    language=args.whisper_language,
+                    caption_lang=args.caption_lang,
+                )
+            except BlockedError as e:
+                on_block(vdir, "YouTube is blocking requests (rate limit / bot check). Stopping "
+                               "now — continuing would extend the block.", e)
+                return
+            if not got:
+                warn("Skipping video (no transcript).")
+                count("failed")
+                return
+            count("done")
 
         # 2+3. visuals — only for screen-heavy + only if we have a media file
-        if args.mode == "screen-heavy":
+        if args.mode == "screen-heavy" and not (vdir / "frames").exists():
             media = v.get("local_path")
-            if media is None:
-                # download the video for frame extraction
-                if has("yt-dlp"):
-                    step("Downloading video for frame extraction...")
-                    out_tmpl = str(vdir / "video.%(ext)s")
-                    run(["yt-dlp", "-f", "worst[ext=mp4]/worst",
-                         "-o", out_tmpl, v["url"]])
-                    cand = list(vdir.glob("video.*"))
-                    media = str(cand[0]) if cand else None
+            if media is None and has("yt-dlp"):
+                step("Downloading video for frame extraction...")
+                out_tmpl = str(vdir / "video.%(ext)s")
+                try:
+                    ytdlp.run(["-f", "worst[ext=mp4]/worst", "-o", out_tmpl, v["url"]])
+                except BlockedError as e:
+                    on_block(vdir, "YouTube is blocking the video download. Stopping.", e)
+                    return
+                touched_network = True
+                cand = list(vdir.glob("video.*"))
+                media = str(cand[0]) if cand else None
             if media and Path(media).exists():
                 extract_frames(media, vdir, args.scene_threshold)
                 dedup_frames(vdir)
@@ -664,27 +972,45 @@ def main():
             else:
                 warn("No media available for frames; transcript only.")
 
-    # Parallel only when explicitly asked. Whisper + ffmpeg are CPU-bound,
-    # so high --jobs on screen-heavy or --force-whisper will thrash; the
-    # captions-first IO-bound path is the safe place to crank this up.
+        if touched_network and args.pause_sec > 0 and pos < len(videos) and not stop.is_set():
+            time.sleep(args.pause_sec + random.uniform(0, 1.0))
+
     if args.jobs > 1:
+        warn(f"--jobs={args.jobs}: {args.jobs}x the request rate. If YouTube blocks the run, "
+             "go back to --jobs 1.")
         if args.mode == "screen-heavy" or args.force_whisper:
-            warn(f"--jobs={args.jobs} with mode={args.mode} / force-whisper "
-                 f"may saturate CPU; consider --jobs 1 if your machine struggles.")
-        with ThreadPoolExecutor(max_workers=args.jobs) as ex:
-            futures = [ex.submit(process_one, i, v) for i, v in enumerate(videos, 1)]
-            for fut in as_completed(futures):
-                # Surface worker exceptions instead of silently dropping them.
-                fut.result()
+            warn("Whisper and frame extraction are CPU-bound; parallel workers may saturate the CPU.")
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = [pool.submit(process_one, pos, v) for pos, v in enumerate(videos, 1)]
+            for fut in futures:
+                fut.result()   # surface worker exceptions instead of dropping them
     else:
-        for i, v in enumerate(videos, 1):
-            process_one(i, v)
+        for pos, v in enumerate(videos, 1):
+            process_one(pos, v)
+            if stop.is_set():
+                break
+
+    done, cached, failed = tally["done"], tally["cached"], tally["failed"]
+    blocked_at = blocked[0] if blocked else None
 
     write_index(root, playlist_name, videos, args.mode)
+
+    if blocked_at:
+        say(f"\n{C['bold']}{C['yellow']}━━━ Stopped: blocked by YouTube ━━━{C['reset']}")
+        say(f"Progress is saved. {done} fetched, {cached} cached, stopped at {blocked_at}.")
+        say("Wait 30–60 minutes (longer if it recurs), then re-run the same command: "
+            "cached videos are skipped automatically.")
+        say("If it keeps happening: run from a home/office IP rather than a cloud box, "
+            "add --cookies-from-browser <browser>, and/or "
+            "--extractor-args 'youtube:player_client=tv,web_safari'. See README → Rate limits.")
+        return EXIT_BLOCKED
+
     say(f"\n{C['bold']}{C['green']}━━━ Done ━━━{C['reset']}")
+    say(f"{done} fetched, {cached} cached, {failed} failed.")
     say(f"Output: {C['cyan']}{root}{C['reset']}")
     say(f"{C['dim']}Open {root}/00_INDEX.md for paste instructions.{C['reset']}\n")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

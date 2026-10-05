@@ -24,6 +24,24 @@ from pathlib import Path
 
 import scope as scope_module
 
+# Inline `[MM:SS]` markers that preprocess_transcript.py writes into
+# transcript.clean.txt. They give every hit a timestamp and are stripped
+# from the quote text itself.
+MARKER_RE = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]")
+
+
+def strip_markers(text: str) -> str:
+    return re.sub(r"\s+", " ", MARKER_RE.sub("", text)).strip()
+
+
+def nearest_marker_before(sentences: list[str], idx: int) -> str:
+    """Timestamp of the last marker at or before sentence idx, else ''."""
+    for i in range(min(idx, len(sentences) - 1), -1, -1):
+        found = MARKER_RE.findall(sentences[i])
+        if found:
+            return found[-1]
+    return ""
+
 
 def porter_stem(word: str) -> str:
     """Tiny stemmer — handles the common English suffixes that matter for
@@ -54,7 +72,7 @@ def split_sentences(text: str) -> list[str]:
 def window(sentences: list[str], idx: int, before: int = 2, after: int = 2) -> str:
     lo = max(0, idx - before)
     hi = min(len(sentences), idx + after + 1)
-    return " ".join(sentences[lo:hi])
+    return strip_markers(" ".join(sentences[lo:hi]))
 
 
 def find_hits(
@@ -117,7 +135,8 @@ def render_markdown(playlist: str, themes: list[str], hits_by_theme: dict) -> st
         for vid in sorted(per_video):
             lines.append(f"\n### {vid}\n")
             for hit in per_video[vid]:
-                lines.append(f"- _[{hit['match']}]_ {hit['quote']}\n")
+                ts = f" `@ {hit['ts']}`" if hit.get("ts") else ""
+                lines.append(f"- _[{hit['match']}]_{ts} {hit['quote']}\n")
     return "".join(lines)
 
 
@@ -128,6 +147,7 @@ def render_citations(hits_by_theme: dict) -> dict:
             for hit in hits:
                 citations[theme].append({
                     "video": vid,
+                    "timestamp": hit.get("ts", ""),
                     "match_kind": hit["match"],
                     "quote": hit["quote"],
                 })
@@ -178,7 +198,11 @@ def main() -> int:
             raw_hits = find_hits(sentences, theme, aliases)
             if raw_hits:
                 hits_by_theme[theme][vid] = [
-                    {"quote": window(sentences, i), "match": kind}
+                    {
+                        "quote": window(sentences, i),
+                        "match": kind,
+                        "ts": nearest_marker_before(sentences, i),
+                    }
                     for i, _sent, kind in raw_hits
                 ]
 

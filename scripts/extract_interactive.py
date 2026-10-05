@@ -120,6 +120,7 @@ def main() -> int:
                   "make extract from a terminal.", file=sys.stderr)
             return 2
         mode = mode or "talking-head"
+        playlist_name = playlist_name or "playlist"
         jobs = int(jobs_raw or "1")
     else:
         print("== Interactive extract ==  (Enter to accept defaults)")
@@ -135,14 +136,16 @@ def main() -> int:
             videos = _ask_videos()
         if not jobs_raw:
             print()
-            print("Parallel workers — captions-first is IO-bound (4-8 is fine);")
-            print("keep at 1 for screen-heavy or --force-whisper on a small machine.")
-            jobs = _ask_int("Jobs", 4)
+            print("Parallel workers — each one is paced, so N workers send N times the")
+            print("requests YouTube sees. Stay at 1 unless 1 is never blocked; keep 1 for")
+            print("screen-heavy or --force-whisper on a small machine.")
+            jobs = _ask_int("Jobs", 1)
         else:
             jobs = int(jobs_raw)
 
     cmd = [
         sys.executable, str(extractor), playlist,
+        "--playlist-name", playlist_name,
         "--mode", mode,
         "--out", out,
         "--jobs", str(jobs),
