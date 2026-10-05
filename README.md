@@ -99,6 +99,7 @@ You tell the tool what you want before it starts. Options:
 | `stats`               | How often a creator says a word, mentions a topic, etc. (no Claude cost) | `stats.json` / `stats.md`        |
 | `quote-mining`        | A list of verbatim quotes matching themes you specify                   | `quotes.md`                      |
 | `style-clone`         | A Skill that mimics the creator's *phrasing*, not just method           | `SKILL.md`                       |
+| `knowledge-diff`      | Only the minutes of each video that are new to *you*                    | `watchlist.md`                   |
 
 Every output (except `stats`) also produces a separate `citations.md`
 file mapping each claim back to **the exact video and timestamp** it
@@ -590,7 +591,8 @@ pip install mcp
 
 Tools: `list_playlists`, `list_videos`, `start_extract`, `extract_status`,
 `preprocess`, `get_transcript`, `get_prompt`, `get_distilled`,
-`save_distilled`, `save_synthesis`, `save_skill`, `quote_mine`.
+`save_distilled`, `save_synthesis`, `save_skill`, `quote_mine`,
+`get_diff_candidates`, `save_knowledge_diff`.
 `save_distilled` refuses any `ts` that is not a `[MM:SS]` marker in that
 video's transcript, so invented timestamps cannot be saved.
 
@@ -621,6 +623,41 @@ under `output/` and `distilled/`, and can only launch yt-dlp against
 `https://youtube.com` / `youtu.be` links. That is a shared-secret URL, not
 per-user login; put Cloudflare Access or OAuth in front if more than one
 person will have the link.
+
+---
+
+## Knowledge diff — watch only what is new
+
+Once a video is distilled, knowdiff can tell you which parts of it you
+have not met before and link straight to them:
+
+```
+## video_02 — Welcome to Girls Who Build Cameras, Summer 2016
+**Watch 6.9 of 8.0 minutes** — 8 new, 1 partly new, 1 already known
+### [01:02–07:58](https://www.youtube.com/watch?v=...&t=62s)
+- `01:02` A camera integrates many engineering disciplines, not just computer science
+...
+```
+
+What counts as already known:
+
+- every video you have distilled before — all other playlists, plus the
+  earlier videos of the same playlist;
+- `knowledge/syllabus.md`, your own list. Plain lines, bullets and
+  `- [x]` items are known; `- [ ]` items are "not yet" and ignored.
+
+Two ways to judge "already covered?":
+
+| Judge | How | Cost | Quality |
+| ----- | --- | ---- | ------- |
+| Word overlap | `make knowledge-diff PLAYLIST_NAME=...` | free, offline | misses paraphrases — it will keep things on the list that you do know |
+| A connected Claude | MCP tools `get_diff_candidates` → `save_knowledge_diff`, following `prompts/06_knowledge_diff.md` | your Claude plan | judges meaning, and explains each "known" with the item that covers it |
+
+Either way the output is `distilled/<playlist>/watchlist.md` plus one
+JSON per video under `distilled/<playlist>/knowledge_diff/`. A passage
+runs from an item's `[MM:SS]` marker to the next item's marker (30 s to
+3 min), and nearby passages are merged, so ranges are approximate to
+about one marker interval.
 
 ---
 

@@ -17,7 +17,7 @@ endif
 
 .PHONY: help scope test1 extract extract-batch preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        diff-synthesis eval test mcp mcp-http clean
+        diff-synthesis eval knowledge-diff test mcp mcp-http clean
 
 help:
 	@echo "Setup:"
@@ -40,6 +40,7 @@ help:
 	@echo "  make summary PLAYLIST_NAME=...          - per-video + playlist summary"
 	@echo "  make stats PLAYLIST_NAME=...            - local word/topic stats (\$$0)"
 	@echo "  make quote-mine PLAYLIST_NAME=... THEMES='a,b,c'  - quotes (\$$0)"
+	@echo "  make knowledge-diff PLAYLIST_NAME=...   - watch-list of what is new to you (\$$0, word-overlap judge)"
 	@echo ""
 	@echo "Audit + iterate:"
 	@echo "  make citations PLAYLIST_NAME=...        - regenerate citations sidecar"
@@ -111,6 +112,9 @@ diff-synthesis:
 
 eval:
 	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT) --mode $(SKILL_MODE)
+
+knowledge-diff:
+	python3 scripts/knowledge_diff.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
 
 test:
 	python3 -m unittest discover -s tests -v
