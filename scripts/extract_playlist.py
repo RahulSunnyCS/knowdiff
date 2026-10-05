@@ -76,7 +76,9 @@ import shlex
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -179,12 +181,49 @@ class YtDlp:
         return res
 
 
+def parse_video_selection(spec: str) -> list[int]:
+    """Parse '10-25', '1,3,5-7', '5' into a sorted list of 1-based indices.
+
+    Raises ValueError on malformed input. Empty/None means "no filter" — the
+    caller should handle that by not calling this function.
+    """
+    indices: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo_s, hi_s = part.split("-", 1)
+            lo, hi = int(lo_s), int(hi_s)
+            if lo < 1 or hi < lo:
+                raise ValueError(f"invalid range '{part}' (must be lo>=1 and hi>=lo)")
+            indices.update(range(lo, hi + 1))
+        else:
+            n = int(part)
+            if n < 1:
+                raise ValueError(f"invalid index '{part}' (must be >= 1)")
+            indices.add(n)
+    if not indices:
+        raise ValueError("empty selection")
+    return sorted(indices)
+
+
 # ── Stage 0: enumerate playlist ───────────────────────────────────────────────
-def enumerate_videos(source: str, is_local: bool, max_videos: int | None):
-    """Return list of dicts: {id, title, url} (or local file entry)."""
+def enumerate_videos(
+    source: str,
+    is_local: bool,
+    max_videos: int | None,
+    selection: list[int] | None = None,
+):
+    """Return list of dicts: {id, title, url, index} (or local file entry).
+
+    `index` is the video's 1-based position in the whole playlist, so a
+    video keeps the same output folder whichever --videos range fetched
+    it (and the cache recognises it on the next run).
+    """
     if is_local:
         title = Path(source).stem
-        return [{"id": "local", "title": title, "url": source, "local_path": source}]
+        return [{"id": "local", "title": title, "url": source, "local_path": source, "index": 1}]
 
     require("yt-dlp")
     step("Enumerating playlist via yt-dlp...")
@@ -209,10 +248,23 @@ def enumerate_videos(source: str, is_local: bool, max_videos: int | None):
             "id": vid,
             "title": j.get("title") or vid,
             "url": j.get("url") or f"https://youtu.be/{vid}",
+            "index": len(videos) + 1,
         })
+    total = len(videos)
+    if selection:
+        kept = []
+        for idx in selection:
+            if 1 <= idx <= total:
+                kept.append(videos[idx - 1])
+            else:
+                warn(f"--videos index {idx} out of range (playlist has {total}); skipping.")
+        videos = kept
     if max_videos:
         videos = videos[:max_videos]
-    ok(f"Found {len(videos)} video(s).")
+    if selection:
+        ok(f"Selected {len(videos)} of {total} video(s) via --videos.")
+    else:
+        ok(f"Found {len(videos)} video(s).")
     return videos
 
 
@@ -747,8 +799,8 @@ def write_index(root: Path, playlist_name: str, videos: list, mode: str):
         "## Videos",
         "",
     ]
-    for i, v in enumerate(videos, 1):
-        lines.append(f"{i:>2}. {v['title']}")
+    for v in videos:
+        lines.append(f"{v['index']:>2}. {v['title']}")
     (root / "00_INDEX.md").write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -773,7 +825,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--whisper-model", default="base",
                    choices=["tiny", "base", "small", "medium"])
     p.add_argument("--scene-threshold", type=float, default=0.4)
-    p.add_argument("--max-videos", type=int, default=None)
+    p.add_argument("--max-videos", type=int, default=None,
+                   help="Cap to the first N videos. Combine with --videos to "
+                        "further trim, or use --videos alone for ranges.")
+    p.add_argument("--videos", default=None,
+                   help="Select specific 1-based indices: '10-25', '5', or "
+                        "'1,3,5-7'. Applied to the playlist order; folders keep "
+                        "the playlist number (video 12 is always video_12_*).")
+    p.add_argument("--jobs", type=int, default=1,
+                   help="Process this many videos concurrently. Each worker is "
+                        "paced, so N workers send N times the requests: raise it "
+                        "only if 1 never gets blocked. All workers stop on the "
+                        "first block. Default: 1.")
     p.add_argument("--out", default="output")
     p.add_argument("--force", action="store_true",
                    help="Refetch even when a transcript is already cached.")
@@ -827,8 +890,19 @@ def main(argv: list[str] | None = None) -> int:
     playlist_name = resolve_playlist_name(args.source, args.local, args.playlist_name)
     root = Path(args.out) / playlist_name
 
+    selection: list[int] | None = None
+    if args.videos:
+        try:
+            selection = parse_video_selection(args.videos)
+        except ValueError as e:
+            err(f"--videos: {e}")
+            return 2
+    if args.jobs < 1:
+        err("--jobs must be >= 1")
+        return 2
+
     try:
-        videos = enumerate_videos(args.source, args.local, args.max_videos)
+        videos = enumerate_videos(args.source, args.local, args.max_videos, selection)
     except BlockedError as e:
         err("YouTube blocked the playlist listing. Nothing was written.")
         say(f"{C['dim']}{e}{C['reset']}")
@@ -839,18 +913,36 @@ def main(argv: list[str] | None = None) -> int:
 
     root.mkdir(parents=True, exist_ok=True)
 
-    done = cached = failed = 0
-    blocked_at: str | None = None
-    for i, v in enumerate(videos, 1):
-        say(f"\n{C['bold']}[{i}/{len(videos)}] {v['title']}{C['reset']}")
-        vdir = root / f"video_{i:02d}_{slugify(v['title'])}"
+    # Shared by the workers. `stop` is set on the first block so every
+    # worker finishes its current video and starts no new one.
+    stop = threading.Event()
+    lock = threading.Lock()
+    tally = {"done": 0, "cached": 0, "failed": 0}
+    blocked: list[str] = []
+
+    def count(key: str) -> None:
+        with lock:
+            tally[key] += 1
+
+    def on_block(vdir: Path, message: str, e: BlockedError) -> None:
+        stop.set()
+        with lock:
+            blocked.append(vdir.name)
+        err(message)
+        say(f"{C['dim']}{e}{C['reset']}")
+
+    def process_one(pos: int, v: dict) -> None:
+        if stop.is_set():
+            return
+        say(f"\n{C['bold']}[{pos}/{len(videos)}] {v['title']}{C['reset']}")
+        vdir = root / f"video_{v['index']:02d}_{slugify(v['title'])}"
         vdir.mkdir(exist_ok=True)
         touched_network = False
 
         # 1. transcript (idempotent)
         if transcript_is_cached(vdir) and not args.force:
             ok("Transcript cached — skipping fetch (use --force to refetch).")
-            cached += 1
+            count("cached")
         else:
             if args.force:
                 for stale in ("source.info.json", "transcript.txt", "transcript.timestamped.json"):
@@ -867,16 +959,14 @@ def main(argv: list[str] | None = None) -> int:
                     caption_lang=args.caption_lang,
                 )
             except BlockedError as e:
-                blocked_at = vdir.name
-                err("YouTube is blocking requests (rate limit / bot check). Stopping "
-                    "now — continuing would extend the block.")
-                say(f"{C['dim']}{e}{C['reset']}")
-                break
+                on_block(vdir, "YouTube is blocking requests (rate limit / bot check). Stopping "
+                               "now — continuing would extend the block.", e)
+                return
             if not got:
                 warn("Skipping video (no transcript).")
-                failed += 1
-                continue
-            done += 1
+                count("failed")
+                return
+            count("done")
 
         # 2+3. visuals — only for screen-heavy + only if we have a media file
         if args.mode == "screen-heavy" and not (vdir / "frames").exists():
@@ -887,10 +977,8 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     ytdlp.run(["-f", "worst[ext=mp4]/worst", "-o", out_tmpl, v["url"]])
                 except BlockedError as e:
-                    blocked_at = vdir.name
-                    err("YouTube is blocking the video download. Stopping.")
-                    say(f"{C['dim']}{e}{C['reset']}")
-                    break
+                    on_block(vdir, "YouTube is blocking the video download. Stopping.", e)
+                    return
                 touched_network = True
                 cand = list(vdir.glob("video.*"))
                 media = str(cand[0]) if cand else None
@@ -905,8 +993,26 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 warn("No media available for frames; transcript only.")
 
-        if touched_network and args.pause_sec > 0 and i < len(videos):
+        if touched_network and args.pause_sec > 0 and pos < len(videos) and not stop.is_set():
             time.sleep(args.pause_sec + random.uniform(0, 1.0))
+
+    if args.jobs > 1:
+        warn(f"--jobs={args.jobs}: {args.jobs}x the request rate. If YouTube blocks the run, "
+             "go back to --jobs 1.")
+        if args.mode == "screen-heavy" or args.force_whisper:
+            warn("Whisper and frame extraction are CPU-bound; parallel workers may saturate the CPU.")
+        with ThreadPoolExecutor(max_workers=args.jobs) as pool:
+            futures = [pool.submit(process_one, pos, v) for pos, v in enumerate(videos, 1)]
+            for fut in futures:
+                fut.result()   # surface worker exceptions instead of dropping them
+    else:
+        for pos, v in enumerate(videos, 1):
+            process_one(pos, v)
+            if stop.is_set():
+                break
+
+    done, cached, failed = tally["done"], tally["cached"], tally["failed"]
+    blocked_at = blocked[0] if blocked else None
 
     write_index(root, playlist_name, videos, args.mode)
 
