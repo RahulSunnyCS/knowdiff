@@ -183,10 +183,21 @@ export ANTHROPIC_API_KEY=sk-...
 
 ## How to run it
 
-There are two end-to-end examples below. Pick the one that matches what
-you want. Both assume you've done the setup above.
+There are two ways to drive the Claude steps (Phases 2–4):
 
-### Example A — Build a Skill that thinks like a creator
+| Path                          | How                                                          | When to use                                                              |
+| ----------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **A. API key** (automated)    | `pip install anthropic && export ANTHROPIC_API_KEY=sk-...`   | You want the pipeline to run end-to-end with one command per phase.      |
+| **B. Claude Code / Claude Pro** | Paste the prompts from `prompts/` into Claude Code or claude.ai | You already pay for a Pro/Max subscription and want zero per-token spend. |
+
+Local steps (extract, preprocess, screenshots, stats, quote-mine) are
+the same on both paths and never need an API key.
+
+The examples below walk through the full flow on Path A. The section
+**"Path B — running it without an API key"** further down shows the
+exact equivalent using Claude Code or claude.ai.
+
+### Example A — Build a Skill that thinks like a creator (API key)
 
 **Scenario:** You follow a creator who runs a CC-licensed conference talk
 playlist. You want a Claude Skill that gives advice in their style.
@@ -208,11 +219,34 @@ make extract PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=myc
 ```
 
 When this finishes you'll have 40-ish `transcript.txt` files under
-`output/mycreator/`. Each video costs exactly **one** yt-dlp call, and a
-video that is already on disk is never fetched again, so if YouTube
+`output/mycreator/`. Each video costs one metadata call and one caption
+request, and a video that is already on disk is never fetched again, so if YouTube
 blocks you halfway (exit code 3) you just wait and re-run the same
 command. See [Rate limits](#rate-limits) below before pointing it at a
 big playlist.
+
+Only want a slice? Use `VIDEOS=` for a range (1-based playlist order).
+Folders keep the playlist number — video 12 is always `video_12_*` —
+so fetching `1-10` today and `11-40` tomorrow builds one consistent
+folder, and nothing is fetched twice:
+
+```
+make extract PLAYLIST="..." VIDEOS="1-10"        # first ten
+make extract PLAYLIST="..." VIDEOS="10-25"       # videos 10 through 25
+make extract PLAYLIST="..." VIDEOS="1,3,5-7"     # cherry-pick
+```
+
+Want it faster? Add `JOBS=N` to process videos in parallel. Each worker
+is paced, so N workers send YouTube N times the requests — in testing,
+two caption requests in quick succession were already enough for an
+HTTP 429. Start at `JOBS=1` and raise it only if that is never blocked;
+on a block, every worker stops and the run exits with code 3. Keep
+`JOBS=1` for `--force-whisper` or `MODE=screen-heavy` unless you have
+spare CPU:
+
+```
+make extract PLAYLIST="..." JOBS=2
+```
 
 **Step 3: clean the transcripts.** This strips filler ("um", "you
 know"), sponsor reads, intros/outros, and repeats. It runs locally and
@@ -352,7 +386,7 @@ This calls the targeted extraction prompt on each cleaned transcript
 
 ---
 
-### Example C — Just find every quote about a topic ($0)
+### Example C — Just retrieve data: every quote about a topic ($0, no Claude)
 
 **Scenario:** You don't need a Skill or a report — you just want every
 place the creator says "passive income" or "index funds," with
@@ -425,13 +459,74 @@ detection looks right before committing to downloads.
 
 ---
 
-### Copy-paste mode (no API key)
+### Path B — Running it without an API key (Claude Code / Claude Pro)
 
-You can run Phases 2–4 entirely by hand if you don't want to set up
-`ANTHROPIC_API_KEY`. Open the prompts in `prompts/`, paste each
-transcript into Claude.ai, save the response as the right filename, and
-repeat. Slower but works on a Pro/Max chat subscription. The PRD
-documents both paths.
+If you pay for **Claude Pro/Max** or use **Claude Code**, you can run
+the Claude phases entirely through the chat / agent interface — no
+`ANTHROPIC_API_KEY`, no per-token spend on top of your subscription.
+The trade-off is that you do one transcript at a time instead of
+batch-parallel.
+
+**Steps 1–3 (local) are identical to Example A:**
+
+```
+make extract     PLAYLIST="https://youtube.com/playlist?list=<id>" PLAYLIST_NAME=mycreator
+make preprocess  PLAYLIST_NAME=mycreator
+```
+
+You now have `output/mycreator/video_NN_*/transcript.clean.txt` for
+each video. From here, instead of `make phase2/phase3/phase4`:
+
+**Phase 2 — distill each video (in Claude Code or claude.ai):**
+
+1. Open `prompts/02_distill_video.md` and copy the whole prompt.
+2. In Claude Code (or a new claude.ai chat): paste the prompt, then
+   attach or paste the contents of `transcript.clean.txt` for
+   `video_01`.
+3. Claude returns a single JSON object. Save it verbatim to
+   `distilled/mycreator/video_01.json`.
+4. Repeat for each video. In **Claude Code**, you can speed this up by
+   asking it to read the files itself, e.g.:
+
+   ```
+   Read prompts/02_distill_video.md, then for each
+   output/mycreator/video_*/transcript.clean.txt run that prompt and
+   write the JSON to distilled/mycreator/video_NN.json. Skip any
+   video_NN.json that already exists.
+   ```
+
+**Phase 3 — synthesize across videos:**
+
+Paste `prompts/03_synthesize.md` plus all the `video_*.json` files
+into a single Claude conversation. Save the response as
+`distilled/mycreator/synthesis.json` and eyeball it before moving on.
+In Claude Code:
+
+```
+Use prompts/03_synthesize.md with all distilled/mycreator/video_*.json
+files as input. Write the result to distilled/mycreator/synthesis.json.
+```
+
+**Phase 4 — author the SKILL.md:**
+
+Paste `prompts/04_author_skill.md` plus `synthesis.json` into Claude
+and ask it to follow the prompt. Save the result as
+`distilled/mycreator/SKILL.md`. Then regenerate citations locally:
+
+```
+make citations PLAYLIST_NAME=mycreator
+```
+
+**Topical reports on Path B** work the same way — substitute
+`prompts/02_topical_extract.md` and `prompts/04_topical_report.md`.
+**Summaries** use `prompts/02_summary.md` + `prompts/03_summary_rollup.md`.
+
+You end up with the same files (`SKILL.md`, `citations.md`, etc.) as
+Path A — the only difference is who orchestrates the calls.
+
+> **Note:** `make eval` (hold-one-out scoring) still needs an API key
+> because it programmatically grades the Skill. Skip it on Path B, or
+> grade by hand using `prompts/05_eval_rubric.md`.
 
 ---
 
