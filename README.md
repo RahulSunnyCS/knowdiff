@@ -466,6 +466,13 @@ the Claude phases entirely through the chat / agent interface — no
 The trade-off is that you do one transcript at a time instead of
 batch-parallel.
 
+**Easier: let Claude drive it through the MCP server.** Open this repo
+in Claude Code (or connect claude.ai to your laptop) and ask it to
+distill the playlist. It reads each transcript, follows the same prompts
+below and saves the results itself, and invented timestamps are refused
+on save. See [MCP server](#mcp-server-no-api-key). The manual steps
+below remain for when you want to do it by hand.
+
 **Steps 1–3 (local) are identical to Example A:**
 
 ```
