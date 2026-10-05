@@ -387,6 +387,24 @@ def transcript_is_cached(vdir: Path) -> bool:
         return False
 
 
+def _slim_info_json(info_path: Path, info: dict, caption_lang: str) -> None:
+    """Drop auto-caption entries for other languages from the cached info JSON.
+
+    YouTube lists an auto-translated track for ~300 languages, which makes
+    the file ~10 MB per video; the tracks in the caption language are the
+    only ones ever read back."""
+    auto = info.get("automatic_captions")
+    if not isinstance(auto, dict):
+        return
+    pref = caption_lang.lower()
+    keep = {k: v for k, v in auto.items() if k.lower() == pref or k.lower().startswith(pref + "-")}
+    if len(keep) == len(auto):
+        return
+    info["automatic_caption_langs_total"] = len(auto)
+    info["automatic_captions"] = keep
+    info_path.write_text(json.dumps(info, ensure_ascii=False), encoding="utf-8")
+
+
 # ── Stage 1a: info.json + description, then exactly one caption track ────────
 def fetch_video_assets(
     video: dict,
@@ -447,6 +465,8 @@ def fetch_video_assets(
             if res.returncode != 0:
                 warn(f"Caption download returned {res.returncode}: {res.stderr.strip()[-300:]}")
 
+    _slim_info_json(info_path, info, caption_lang)
+
     # description.txt (chapter timestamps live here; preprocessor reads it)
     desc = info.get("description")
     if desc and not (vdir / "description.txt").exists():
@@ -464,6 +484,7 @@ def fetch_video_assets(
             "upload_date": info.get("upload_date"),
             "manual_sub_langs": sorted((info.get("subtitles") or {}).keys()),
             "auto_sub_langs": sorted((info.get("automatic_captions") or {}).keys()),
+            "auto_sub_langs_total": info.get("automatic_caption_langs_total"),
         }
         meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     return info

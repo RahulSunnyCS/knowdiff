@@ -63,6 +63,8 @@ REPEAT_WINDOW_SECONDS = 60
 REPEAT_JACCARD_THRESHOLD = 0.8
 
 DEFAULT_MARKER_INTERVAL_SEC = 30.0
+# Intro and outro trims are each capped at this share of the video's length.
+DEFAULT_MAX_TRIM_FRACTION = 0.05
 
 # Inline timestamp marker as rendered into transcript.clean.txt.
 MARKER_RE = re.compile(r"\[(\d{1,2}:\d{2}(?::\d{2})?)\]")
@@ -417,6 +419,7 @@ def preprocess_video_dir(
     do_repeats: bool = True,
     do_chapters: bool = True,
     marker_interval_sec: float = DEFAULT_MARKER_INTERVAL_SEC,
+    max_trim_fraction: float = DEFAULT_MAX_TRIM_FRACTION,
 ) -> PreprocessReport:
     transcript_path = video_dir / "transcript.txt"
     if not transcript_path.exists():
@@ -436,6 +439,11 @@ def preprocess_video_dir(
     if segments:
         # ── Timestamp-aware path ──
         report.timestamped = True
+        # A fixed 30 s off each end is right for a long lecture and far too
+        # much for a 2-minute clip, so each trim is capped at a share of
+        # the video's length.
+        cap = max(s["end"] for s in segments) * max_trim_fraction
+        intro_sec, outro_sec = min(intro_sec, cap), min(outro_sec, cap)
         kept, trim_cuts = trim_intro_outro_segments(segments, intro_sec, outro_sec)
         report.cuts.extend(trim_cuts)
         text, markers = render_with_markers(kept, marker_interval_sec)

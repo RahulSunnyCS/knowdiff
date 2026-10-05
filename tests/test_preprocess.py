@@ -89,6 +89,17 @@ class EndToEndTests(unittest.TestCase):
         self.assertTrue(data["timestamped"])
         self.assertEqual(data["marker_count"], report.marker_count)
 
+    def test_trim_is_capped_on_short_videos(self):
+        # 150 s clip: a 30 s trim at each end would drop 40%; the cap makes it 7.5 s.
+        segs = [spoken(i * 5, f"sentence number {i} about the topic.", dur=5) for i in range(0, 30)]
+        write_segments(self.vdir, segs)
+        report = pp.preprocess_video_dir(self.vdir)
+        def trimmed(report) -> float:
+            return sum(c.end - c.start for c in report.cuts if c.reason in ("intro", "outro"))
+        self.assertLessEqual(trimmed(pp.preprocess_video_dir(self.vdir)), 15.0)
+        # Uncapped behaviour is still available.
+        self.assertEqual(trimmed(pp.preprocess_video_dir(self.vdir, max_trim_fraction=1.0)), 60.0)
+
     def test_flat_fallback_without_sidecar(self):
         self.vdir.mkdir(parents=True)
         (self.vdir / "transcript.txt").write_text("x " * 2000)
