@@ -172,16 +172,18 @@ and the not-known ones become merged, deep-linked watch ranges in
 built: an API-model judge for the CLI (needs a key), and marking a
 video as "watched" independently of it being distilled.
 
-### ✓ 24. `strategy-claims` intent
-`scripts/strategy_claims.py`, `prompts/02_strategy_claims.md`,
-`prompts/07_strategy_translate.md`, MCP tools `save_strategy_cards` /
-`get_strategy_cards` / `save_strategy_translation`. Hypothesis cards
-grounded by a verbatim-quote check and the timestamp guard, clustered by
-instrument + structure across creators, with a translation record whose
-`manual_review` must name every unstated entry/exit/sizing the YAML had
-to choose. Unit-tested; the option-backtesting `validate_strategy` call
-the translation prompt relies on was checked live with a card-shaped
-YAML. Not yet run on a real trading video.
+### ✓ 24. `claim-cards` intent (was planned as trading-only `strategy-claims`)
+Generic: `scripts/claim_cards.py`, `prompts/02_claim_cards.md`, MCP tools
+`list_card_profiles` / `get_card_instructions` / `save_claim_cards` /
+`get_claim_cards` / `save_card_translation`. What a card is for a subject
+comes from a profile under `profiles/` (`generic` is the default;
+`trading` adds strategy fields and a translation step into the
+option-backtesting DSL via `prompts/07_trading_translate.md`). Cards are
+grounded by a verbatim-quote check and the timestamp guard and clustered
+by subject + tag across creators; a translation's `manual_review` must
+name everything it could not express or had to choose. The generic
+profile was tried on a real non-trading video; the trading profile has
+not been run on a real trading video.
 
 ---
 

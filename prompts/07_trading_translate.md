@@ -1,6 +1,6 @@
-# Strategy-card translation prompt
+# Trading-card translation prompt (profile: trading)
 
-You will translate one hypothesis card (from `get_strategy_cards`) into
+You will translate one `trading` claim card (from `get_claim_cards`) into
 the option-backtesting strategy DSL, so the creator's claim can be
 backtested. You need the `option-backtesting` MCP server connected as
 well: use its `validate_strategy` (and `propose_strategy` when a preset
@@ -9,13 +9,13 @@ is close to the card) to check what you write.
 Steps:
 
 1. Read the card's `entry`, `exit`, `sizing`, `regime`, `instrument` and
-   `structure`.
+   `tag` (the structure).
 2. Write the strategy YAML for the parts the DSL can express. Start from
    the nearest preset with `propose_strategy` when one fits; otherwise
    write the YAML and call `validate_strategy`.
 3. If validation fails, fix the YAML and validate again. Do not report
    `valid: true` unless the last `validate_strategy` call returned it.
-4. Call `save_strategy_translation` with the YAML, the validation
+4. Call `save_card_translation` with the YAML as `artifact`, the validation
    outcome, and `manual_review`.
 
 `manual_review` is the important part. List there, one line each:

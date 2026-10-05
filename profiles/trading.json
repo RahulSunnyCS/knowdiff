@@ -1,0 +1,21 @@
+{
+  "name": "trading",
+  "description": "Trading content: strategies that could be checked against market data.",
+  "card_is": "a testable trading idea: what to trade, when to get in, when to get out. General market commentary, motivation and platform walkthroughs are not cards.",
+  "tags": ["short_straddle", "short_strangle", "long_straddle", "long_strangle", "iron_condor", "iron_fly",
+           "credit_spread", "debit_spread", "calendar", "option_buy", "option_sell", "futures", "equity", "other"],
+  "cluster_by": "instrument",
+  "fields": [
+    {"name": "instrument", "description": "what is traded, e.g. NIFTY weekly options"},
+    {"name": "entry", "description": "the entry rule as stated; keep times and numbers exact"},
+    {"name": "exit", "description": "stop, target or time exit as stated"},
+    {"name": "sizing", "description": "lots, capital or risk per trade as stated"},
+    {"name": "regime", "description": "when the creator says it works or fails"},
+    {"name": "edge", "description": "the result the creator claims (a claim, not evidence)"}
+  ],
+  "translation": {
+    "prompt": "07_trading_translate",
+    "artifact": "option-backtesting strategy YAML",
+    "must_state": ["entry", "exit", "sizing"]
+  }
+}
