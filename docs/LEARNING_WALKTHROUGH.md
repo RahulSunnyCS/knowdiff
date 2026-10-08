@@ -94,7 +94,7 @@ flowing through the pipeline.
 
 ### 1.3 `dataclass` — a struct with less boilerplate
 
-Look at `scripts/pricing.py:15`:
+Look at `scripts/pricing.py:20`:
 
 ```python
 @dataclass(frozen=True)
@@ -109,7 +109,7 @@ A `@dataclass` auto-generates the `__init__`, `__repr__`, and equality for you.
 `frozen=True` makes instances **immutable** (you can't reassign fields after
 creation) — correct for a price table, which shouldn't change under you.
 
-`scripts/scope.py:43` uses a mutable dataclass with **default factories**:
+`scripts/scope.py:49` uses a mutable dataclass with **default factories**:
 
 ```python
 @dataclass
@@ -139,7 +139,7 @@ talk about in a system-design interview.
 class ClaudeClient:
     def complete(self, *, system: str, user: str, cache_system: bool = True, ...) -> CompletionResult:
 ```
-(`scripts/claude_client.py:66`)
+(`scripts/claude_client.py:70`)
 
 Every phase calls `client.complete(...)`. None of them import the Anthropic SDK
 directly. So if you wanted to swap Claude for a different provider, or a mock in
@@ -205,13 +205,13 @@ this everywhere; once you recognize it, the file I/O reads like English.
 LLMs don't see characters or words; they see **tokens** (~¾ of a word on
 average). You pay per token, and **input** (what you send) and **output** (what
 the model writes) are priced differently. The real table is in
-`scripts/pricing.py:25`:
+`scripts/pricing.py:30` (a dict keyed by model ID; headline models shown):
 
 ```python
 PRICES = {
-    "claude-opus-4-7":            ModelPrice(15.00, 75.00, 1.50, 18.75),
-    "claude-sonnet-4-6":          ModelPrice( 3.00, 15.00, 0.30,  3.75),
-    "claude-haiku-4-5-20251001":  ModelPrice( 1.00,  5.00, 0.10,  1.25),
+    "claude-opus-5-5":   ModelPrice(4.00, 20.00, 0.20, 5.00),
+    "claude-sonnet-5-5": ModelPrice(2.00, 10.00, 0.20, 2.50),
+    "claude-haiku-4-5":  ModelPrice(1.00,  5.00, 0.10, 1.25),
 }
 ```
 
@@ -223,7 +223,7 @@ you to know:
    lever, not just tidiness.
 2. **Model choice is a cost/quality dial.** The pipeline uses cheap **Haiku**
    for the mechanical per-video distillation and pricier **Sonnet** for
-   synthesis and answering (`scripts/scope.py:18`). That's deliberate: spend
+   synthesis and answering (`scripts/scope.py:21`). That's deliberate: spend
    money where reasoning quality matters.
 
 ### 2.2 Prompt caching — the "cache_read" columns
@@ -241,7 +241,7 @@ system_param = [{
     "cache_control": {"type": "ephemeral"},
 }]
 ```
-(`scripts/claude_client.py:78`)
+(`scripts/claude_client.py:86`)
 
 In Phase 2, the same distillation instructions are sent for all 40 videos — so
 caching the instruction block turns 40× full-price system prompts into 1 write +
@@ -261,9 +261,15 @@ call) is both a quality and a cost decision.
 
 ### 2.4 Retries with exponential backoff
 
-Networks and rate limits fail. `claude_client.py:88` retries transient errors
-with a doubling delay (`delay *= 2`): wait 2s, then 4s, then 8s… This is
-**exponential backoff**, standard practice for any remote API. Know the term.
+Networks and rate limits fail. The adapter delegates retries to the Anthropic
+SDK by constructing `Anthropic(max_retries=max_retries)`
+(`scripts/claude_client.py:65`): the SDK retries transient errors (429 / 5xx /
+connection drops) with **exponential backoff** and honors `retry-after`, and
+after the budget is exhausted `complete()` translates the SDK's exceptions into
+clear messages (rate-limited, auth, network). "Exponential backoff" —
+progressively longer waits between retries — is standard practice for any
+remote API; know the term, and know that leaning on the SDK's implementation
+beats hand-rolling your own loop.
 
 ---
 

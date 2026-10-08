@@ -75,7 +75,6 @@ jobs:
 
           scripts_dir = Path("scripts").resolve()
           sys.path.insert(0, str(scripts_dir))
-
           fails = []
           for p in sorted(scripts_dir.glob("*.py")):
               spec = importlib.util.spec_from_file_location(p.stem, p)
@@ -95,6 +94,10 @@ jobs:
               sys.exit(1)
           print(f"Sanity-imported {len(list(scripts_dir.glob('*.py')))} scripts OK.")
           PY
+
+      - name: Unit tests (no network, no API key)
+        run: |
+          python -m unittest discover -s tests -v
 
   markdown-links:
     name: Markdown link check

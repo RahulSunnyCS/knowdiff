@@ -15,10 +15,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 
+# Haiku for the mechanical per-video extraction (cheapest, good enough for
+# schema-constrained JSON); the current Sonnet for synthesis and authoring.
+# Use the bare IDs — no date suffix — so the SDK resolves the served model.
 DEFAULT_MODELS = {
-    "phase2": "claude-haiku-4-5-20251001",
-    "phase3": "claude-sonnet-4-6",
-    "phase4": "claude-sonnet-4-6",
+    "phase2": "claude-haiku-4-5",
+    "phase3": "claude-sonnet-5-5",
+    "phase4": "claude-sonnet-5-5",
 }
 
 # Embeddings for the `qa` (RAG) intent. Local-first by default to preserve the
@@ -37,6 +40,8 @@ VALID_INTENTS = {
     "quote-mining",
     "topical-report",
     "qa",
+    "knowledge-diff",
+    "claim-cards",
 }
 
 

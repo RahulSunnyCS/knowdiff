@@ -62,6 +62,8 @@ def interactive(playlist: str) -> tuple[Scope, dict]:
     print("  stats                - word/phrase frequency (no Claude cost)")
     print("  quote-mining         - extract verbatim quotes by theme (no Claude cost)")
     print("  topical-report       - PDF answering 'what does X think about Y?'")
+    print("  knowledge-diff       - watch-list of only the minutes that are new to you")
+    print("  claim-cards          - the checkable claims in each video, as cards (via the MCP server)")
     intent = _prompt("Intent", default="method-distillation", allowed=sorted(VALID_INTENTS))
 
     language = _prompt("Source language (ISO 639-1, or 'auto')", default="auto")

@@ -5,42 +5,12 @@ OUT ?= output
 SKILL_MODE ?= Teacher
 # Optional: '10-25', '1,3,5-7', or a single number. Empty = all.
 VIDEOS ?=
-# Parallel video workers for the extract step. Safe with captions; keep
-# at 1 for --force-whisper / screen-heavy on modest hardware.
+# Parallel video workers for the extract step. Each worker is paced, so N
+# workers send N times the requests YouTube sees; keep at 1 unless 1 is
+# never blocked, and at 1 for --force-whisper / screen-heavy.
 JOBS ?= 1
 
-# Network / rate-limit knobs. Empty by default; set on the command line when
-# YouTube throttles you (429 / "confirm you're not a bot"). See README.
-#   COOKIES_FROM=chrome   COOKIES=cookies.txt   PROXY=http://host:port
-#   SLEEP=2 (between requests)   SLEEP_MIN / SLEEP_MAX (per download)
-#   RETRIES=10   LIMIT_RATE=2M
-NET_FLAGS =
-ifneq ($(strip $(COOKIES_FROM)),)
-NET_FLAGS += --cookies-from-browser $(COOKIES_FROM)
-endif
-ifneq ($(strip $(COOKIES)),)
-NET_FLAGS += --cookies $(COOKIES)
-endif
-ifneq ($(strip $(PROXY)),)
-NET_FLAGS += --proxy $(PROXY)
-endif
-ifneq ($(strip $(SLEEP)),)
-NET_FLAGS += --sleep-requests $(SLEEP)
-endif
-ifneq ($(strip $(SLEEP_MIN)),)
-NET_FLAGS += --sleep-interval $(SLEEP_MIN)
-endif
-ifneq ($(strip $(SLEEP_MAX)),)
-NET_FLAGS += --max-sleep-interval $(SLEEP_MAX)
-endif
-ifneq ($(strip $(RETRIES)),)
-NET_FLAGS += --retries $(RETRIES)
-endif
-ifneq ($(strip $(LIMIT_RATE)),)
-NET_FLAGS += --limit-rate $(LIMIT_RATE)
-endif
-
-EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS) --playlist-name $(PLAYLIST_NAME) $(NET_FLAGS)
+EXTRACT_FLAGS = --mode $(MODE) --out $(OUT) --jobs $(JOBS)
 ifneq ($(strip $(VIDEOS)),)
 EXTRACT_FLAGS += --videos "$(VIDEOS)"
 endif
@@ -61,7 +31,8 @@ endif
 
 .PHONY: help scope test1 extract extract-batch preprocess phase2 phase3 phase4 \
         topical summary stats quote-mine screenshots citations \
-        index ask rag-eval diff-synthesis eval clean
+        index ask rag-eval diff-synthesis eval knowledge-diff claim-cards \
+        test mcp mcp-http clean
 
 help:
 	@echo "Setup:"
@@ -70,7 +41,7 @@ help:
 	@echo "Extract + prep (local, free):"
 	@echo "  make test1                              - extract one video as sanity check"
 	@echo "  make extract                            - interactive extract (prompts for url, range, jobs)"
-	@echo "  make extract-batch PLAYLIST=... VIDEOS=10-25 JOBS=4   - non-interactive"
+	@echo "  make extract-batch PLAYLIST=... PLAYLIST_NAME=... VIDEOS=10-25   - non-interactive"
 	@echo "  make preprocess PLAYLIST_NAME=...       - clean transcripts"
 	@echo "  make screenshots PLAYLIST_NAME=...      - frames at deictic moments"
 	@echo ""
@@ -84,6 +55,8 @@ help:
 	@echo "  make summary PLAYLIST_NAME=...          - per-video + playlist summary"
 	@echo "  make stats PLAYLIST_NAME=...            - local word/topic stats (\$$0)"
 	@echo "  make quote-mine PLAYLIST_NAME=... THEMES='a,b,c'  - quotes (\$$0)"
+	@echo "  make claim-cards                        - rebuild the clustered claim-card index (\$$0)"
+	@echo "  make knowledge-diff PLAYLIST_NAME=...   - watch-list of what is new to you (\$$0, word-overlap judge)"
 	@echo ""
 	@echo "Ask questions (RAG, intent=qa):"
 	@echo "  make index PLAYLIST_NAME=...            - build the retrieval index"
@@ -95,7 +68,10 @@ help:
 	@echo "Audit + iterate:"
 	@echo "  make citations PLAYLIST_NAME=...        - regenerate citations sidecar"
 	@echo "  make diff-synthesis OLD=... NEW=...     - compare two synthesis.json"
-	@echo "  make eval PLAYLIST_NAME=...             - hold-one-out scoring"
+	@echo "  make eval PLAYLIST_NAME=...             - hold-one-out scoring (leak-free rebuild)"
+	@echo "  make test                               - run the unit tests (no network, no API key)"
+	@echo "  make mcp                                - MCP server over stdio (no API key)"
+	@echo "  make mcp-http MCP_HOST=<tunnel host>    - MCP server over HTTP for a tunnel (needs KNOWDIFF_MCP_TOKEN)"
 	@echo "  make clean                              - remove output/ and distilled/"
 	@echo ""
 	@echo "Vars: PLAYLIST=<url>  PLAYLIST_NAME=<dir>  MODE={talking-head,screen-heavy}  OUT=<dir>"
@@ -105,7 +81,7 @@ scope:
 	python3 scripts/scope_init.py --playlist $(PLAYLIST_NAME)
 
 test1:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" --mode $(MODE) --max-videos 1 --out $(OUT) --playlist-name $(PLAYLIST_NAME) $(NET_FLAGS)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --playlist-name $(PLAYLIST_NAME) --mode $(MODE) --max-videos 1 --out $(OUT)
 
 # Only forward a variable to the interactive front-end if the user
 # actually set it (command line or environment) — Makefile defaults
@@ -119,18 +95,10 @@ extract:
 	 VIDEOS="$(call _user_set,VIDEOS)" \
 	 JOBS="$(call _user_set,JOBS)" \
 	 OUT="$(OUT)" \
-	 COOKIES_FROM="$(COOKIES_FROM)" \
-	 COOKIES="$(COOKIES)" \
-	 PROXY="$(PROXY)" \
-	 SLEEP="$(SLEEP)" \
-	 SLEEP_MIN="$(SLEEP_MIN)" \
-	 SLEEP_MAX="$(SLEEP_MAX)" \
-	 RETRIES="$(RETRIES)" \
-	 LIMIT_RATE="$(LIMIT_RATE)" \
 	 python3 scripts/extract_interactive.py
 
 extract-batch:
-	python3 scripts/extract_playlist.py "$(PLAYLIST)" $(EXTRACT_FLAGS)
+	python3 scripts/extract_playlist.py "$(PLAYLIST)" --playlist-name $(PLAYLIST_NAME) $(EXTRACT_FLAGS)
 
 preprocess:
 	python3 scripts/preprocess_transcript.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
@@ -178,7 +146,22 @@ diff-synthesis:
 	python3 scripts/diff_synthesis.py --old "$(OLD)" --new "$(NEW)" --out distilled/$(PLAYLIST_NAME)/CHANGELOG.md
 
 eval:
-	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
+	python3 scripts/run_eval.py --playlist $(PLAYLIST_NAME) --output-root $(OUT) --mode $(SKILL_MODE)
+
+claim-cards:
+	python3 scripts/claim_cards.py
+
+knowledge-diff:
+	python3 scripts/knowledge_diff.py --playlist $(PLAYLIST_NAME) --output-root $(OUT)
+
+test:
+	python3 -m unittest discover -s tests -v
+
+mcp:
+	python3 scripts/mcp_server.py
+
+mcp-http:
+	python3 scripts/mcp_server.py --http $(if $(MCP_HOST),--allowed-host $(MCP_HOST))
 
 clean:
 	rm -rf $(OUT) distilled

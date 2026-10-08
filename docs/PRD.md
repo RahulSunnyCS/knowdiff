@@ -1,4 +1,4 @@
-# PRD: youtube-skill-fetch
+# PRD: knowdiff (formerly youtube-skill-fetch)
 
 **Status:** Draft
 **Owner:** TBD
@@ -126,21 +126,31 @@ A short pre-flight that the rest of the pipeline reads from
 - **F1.1** Accept a YouTube playlist URL (or single video URL).
 - **F1.2** Honor `--mode {talking-head, screen-heavy}` and `--max-videos N`.
 - **F1.3** Prefer existing captions; fall back to Whisper only when absent.
-  Whisper model selection honors `scope.json` language; for non-English
-  sources without captions, warn the operator before falling back.
+  Captions, metadata and the description come from **one** yt-dlp call per
+  video (json3 track), cached as raw files beside the transcript. Whisper
+  model selection honors `scope.json` language; for non-English sources
+  without captions, warn the operator before falling back.
 - **F1.4** For `screen-heavy`, sample frames and run OCR (`tesseract`),
   emitting an OCR sidecar.
 - **F1.5** Produce one directory per video with `transcript.txt` and
   metadata; never overwrite existing artifacts.
-- **F1.6** Be resumable: re-running skips videos already extracted.
+- **F1.6** Be resumable: re-running skips videos already extracted
+  (transcript + timestamped sidecar present), never re-fetching from
+  YouTube. `--force` overrides.
+- **F1.7** Rate-limit posture: paced requests by default; stop the run on
+  the first block signature (exit code 3) rather than continuing; pass
+  cookies / extractor args / raw flags through to yt-dlp.
 
 ### Phase 2 — Distill per video (Claude, map)
 - **F2.1** Prompt `prompts/02_distill_video.md` takes one transcript and
   emits structured JSON of claims, heuristics, examples, and moves.
 - **F2.2** One JSON file per video at `distilled/<playlist>/video_NN.json`.
 - **F2.3** Every extracted item carries a `source` field with `video_id`
-  and `timestamp` (MM:SS) so it can be cited later. Citations are not
-  embedded in `SKILL.md` — they live in a separate sidecar (see §10).
+  and `timestamp` (MM:SS) so it can be cited later. The timestamp is read
+  off inline `[MM:SS]` markers that the preprocessor renders into
+  `transcript.clean.txt` from the timestamped sidecar (roughly every 30 s);
+  the model is instructed never to invent one. Citations are not embedded
+  in `SKILL.md` — they live in a separate sidecar (see §10).
 - **F2.4** For `topical-report` intent, Phase 2 extracts only statements
   relevant to the user's question (passed via `scope.json:question`),
   not the full method.
@@ -213,11 +223,11 @@ Phase 1 is free (local CPU/disk). Claude API cost is dominated by Phase 2
 and scales linearly with playlist size. Estimates assume ~15 min videos
 with ~2k word transcripts (~3k input tokens each, ~1k output JSON).
 
-| Playlist size | Total in | Total out | Sonnet 4.6 (~$3/M in, $15/M out) | Opus 4.7 (~$15/M in, $75/M out) |
+| Playlist size | Total in | Total out | Sonnet 5.5 (~$2/M in, $10/M out) | Opus 5.5 (~$4/M in, $20/M out) |
 | ------------- | -------- | --------- | -------------------------------- | ------------------------------- |
-| 10 videos     | ~45k     | ~14k      | ~$0.35                           | ~$1.75                          |
-| 50 videos     | ~210k    | ~65k      | ~$1.60                           | ~$8.00                          |
-| 100 videos    | ~415k    | ~130k     | ~$3.20                           | ~$15.50                         |
+| 10 videos     | ~45k     | ~14k      | ~$0.23                           | ~$0.46                          |
+| 50 videos     | ~210k    | ~65k      | ~$1.07                           | ~$2.14                          |
+| 100 videos    | ~415k    | ~130k     | ~$2.13                           | ~$4.26                          |
 
 Cost is order-of-magnitude; real numbers depend on transcript length, model
 choice, and whether Phase 3 uses **prompt caching** on the per-video JSON
@@ -244,9 +254,11 @@ Non-default intents adjust this:
 ```
 distilled/<playlist>/scope.json                    # Phase 0
 distilled/<playlist>/consent.json                  # Phase 0 rights confirmation
+output/<playlist>/video_NN_<slug>/source.info.json             # raw yt-dlp metadata (cache)
+output/<playlist>/video_NN_<slug>/source.<lang>.json3          # raw caption track (cache)
 output/<playlist>/video_NN_<slug>/transcript.txt
 output/<playlist>/video_NN_<slug>/transcript.timestamped.json  # segment-level start/end (captions or Whisper)
-output/<playlist>/video_NN_<slug>/transcript.clean.txt         # preprocessor output
+output/<playlist>/video_NN_<slug>/transcript.clean.txt         # preprocessor output, with inline [MM:SS] markers
 output/<playlist>/video_NN_<slug>/preprocess.json              # what the preprocessor removed and why
 output/<playlist>/video_NN_<slug>/description.txt              # YouTube description (chapter timestamps live here)
 output/<playlist>/video_NN_<slug>/chapters/*.txt               # per-chapter splits when description has chapters
@@ -311,10 +323,11 @@ trust measurable; the marketplace makes vetted outputs discoverable.
 ### Eval (per-output)
 
 - **F11b.1** Hold-one-out evaluation: regenerate the skill from N-1
-  videos; ask Claude (with the generated skill loaded as context) to
-  predict the creator's moves/heuristics on the held-out video; score
-  against the actual content using a structured rubric (overlap,
-  novelty, factual accuracy).
+  videos **in a scratch root the held-out video's JSON is excluded from**;
+  ask Claude (with the generated skill loaded as context) to predict the
+  creator's moves/heuristics on the held-out video; score against the
+  actual content using a structured rubric (overlap, novelty, factual
+  accuracy). `score.json` records `leak_free`.
 - **F11b.2** Emit `score.json` alongside every `SKILL.md` /
   `report.md`. Includes overall score, per-rubric breakdown, and the
   held-out video ID.
@@ -379,7 +392,9 @@ machine, and each user is solely responsible for their own compliance.
 
 ## 13. Risks & mitigations
 
-- **YouTube ToS / rate limits.** Mitigation: respect `yt-dlp` defaults;
+- **YouTube ToS / rate limits.** Mitigation: one paced yt-dlp call per
+  video, a permanent raw cache so nothing is fetched twice, stop-on-block
+  (F1.7), and a README section on identity / residential IP options;
   document that users are responsible for their entitlements.
 - **Caption quality varies.** Mitigation: Whisper fallback; human review gate
   before synthesis.

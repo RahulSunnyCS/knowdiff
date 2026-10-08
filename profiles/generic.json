@@ -1,0 +1,14 @@
+{
+  "name": "generic",
+  "description": "Any subject: the checkable or actionable claims a creator makes.",
+  "card_is": "a claim someone could act on or check: a rule, a technique, a recommendation, a prediction, or a comparison. Background facts, anecdotes and motivation are not cards.",
+  "tags": ["rule", "technique", "recommendation", "prediction", "comparison", "warning", "other"],
+  "cluster_by": "topic",
+  "fields": [
+    {"name": "topic", "description": "the subject the claim is about, in two or three words"},
+    {"name": "when", "description": "the situation or condition in which it applies, as stated"},
+    {"name": "do", "description": "what to do, as stated"},
+    {"name": "expect", "description": "the result the creator says follows"},
+    {"name": "caveats", "description": "limits or exceptions the creator gives"}
+  ]
+}

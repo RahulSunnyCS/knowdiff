@@ -4,7 +4,11 @@ Per-model Claude pricing table (USD per million tokens).
 Hand-maintained on purpose: fetching live prices is brittle and prices
 change rarely. Update this dict when Anthropic adjusts pricing.
 
-Last reviewed: 2026-05.
+Cache-write price is 1.25x input (5-minute TTL, the only TTL this
+pipeline uses); cache-read price is whatever Anthropic lists for the
+model (0.1x input on most models, 0.05x on the 5.5 generation).
+
+Last reviewed: 2026-10.
 """
 
 from __future__ import annotations
@@ -21,13 +25,24 @@ class ModelPrice:
     cache_write_per_m: float
 
 
-# Keys match the model IDs passed to the SDK.
+# Keys match the model IDs passed to the SDK. Dated aliases are kept so an
+# old scope.json keeps pricing correctly.
 PRICES: dict[str, ModelPrice] = {
-    "claude-opus-4-7": ModelPrice(15.00, 75.00, 1.50, 18.75),
-    "claude-sonnet-4-6": ModelPrice(3.00, 15.00, 0.30, 3.75),
+    # Current generation
+    "claude-opus-5-5": ModelPrice(4.00, 20.00, 0.20, 5.00),
+    "claude-sonnet-5-5": ModelPrice(2.00, 10.00, 0.20, 2.50),
+    "claude-haiku-4-5": ModelPrice(1.00, 5.00, 0.10, 1.25),
     "claude-haiku-4-5-20251001": ModelPrice(1.00, 5.00, 0.10, 1.25),
+    # Previous generations still served
+    "claude-opus-5": ModelPrice(5.00, 25.00, 0.50, 6.25),
+    "claude-opus-4-8": ModelPrice(5.00, 25.00, 0.50, 6.25),
+    "claude-opus-4-7": ModelPrice(5.00, 25.00, 0.50, 6.25),
+    "claude-opus-4-6": ModelPrice(5.00, 25.00, 0.50, 6.25),
+    "claude-sonnet-5": ModelPrice(2.00, 10.00, 0.20, 2.50),
+    "claude-sonnet-4-6": ModelPrice(3.00, 15.00, 0.30, 3.75),
 }
 
+# Unknown model: assume Sonnet-class pricing rather than silently under-counting.
 DEFAULT_PRICE = ModelPrice(3.00, 15.00, 0.30, 3.75)
 
 

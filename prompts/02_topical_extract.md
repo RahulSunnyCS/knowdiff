@@ -31,6 +31,9 @@ Rules:
 - `stance` distinguishes the creator's posture so the synthesis pass can
   separate "they believe X" from "they reject X".
 - `facet` is a short label to enable clustering across videos.
+- `ts`: the transcript carries inline `[MM:SS]` markers roughly every 30
+  seconds. Use the nearest marker at or before the statement (without the
+  brackets). If there are no markers, use `""`. Never invent a timestamp.
 - Do NOT extract general method/heuristics here (that's the method-distillation
   prompt's job). Stick to topical content.
 - If the transcript truly has nothing relevant, return empty `stmts` and

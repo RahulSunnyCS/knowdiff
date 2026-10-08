@@ -164,9 +164,101 @@ source, `score.json` ≥ 0.60, explicit attribution). Directory is
 intentionally empty in initial release — needs a real CC playlist run
 to populate.
 
+### ✓ 17. Extraction fixes (2026-10 review)
+- Idempotent extract: a video with `transcript.txt` + sidecar is never
+  refetched (`--force` to override). PRD F1.6 was documented but not
+  implemented; re-runs after a block used to re-hit every video.
+- Two yt-dlp calls per video — metadata (info.json + description), then
+  exactly one json3 caption track chosen from it via `--load-info-json` —
+  replace the description call + 2–4 `youtube-transcript-api` calls. (A
+  single call asking for `en.*` was tried first; live, YouTube answers the
+  second caption track with HTTP 429 and yt-dlp then drops the metadata.)
+  `youtube-transcript-api` dropped. Raw `source.*` files kept as cache.
+- Paced by default (`--sleep-requests`, `--sleep-subtitles`,
+  `--pause-sec`); stops with exit code 3 on the first block signature;
+  `--cookies-from-browser` / `--extractor-args` / `--yt-dlp-args`
+  pass-through. README "Rate limits" section.
+- `--playlist-name` flag; the Makefile now passes `PLAYLIST_NAME` to
+  `extract`/`test1` (previously everything landed in `output/playlist/`
+  while later phases read `output/<PLAYLIST_NAME>/`).
+- `metadata.json` written per video (`capture_screenshots.py` was reading
+  a `url` nobody wrote).
+- The cached `source.info.json` keeps auto-caption entries only for the
+  caption language (≈10 MB → ≈100 KB per video).
+- Intro/outro trims are each capped at 5% of the video's length, so a
+  2-minute clip no longer loses 40% of its transcript.
+
+### ✓ 18. Real timestamps in citations
+Phase 2 never saw timestamps (flat text only), so every `ts` was a guess.
+The preprocessor now renders `[MM:SS]` markers every 30 s from the
+sidecar, trims intro/outro by time and splits chapters by segment time;
+the distill + topical prompts read the nearest marker. Quote-mining
+reports `ts` per hit.
+
+### ✓ 19. Leak-free eval
+`run_eval.py` rebuilt Phase 3 + 4 in a scratch root with the held-out
+JSON removed, as the docstring always claimed. `score.json` carries
+`leak_free`.
+
+### ✓ 20. Models, prices, client
+Defaults → `claude-haiku-4-5` / `claude-sonnet-5-5`; pricing table
+corrected (Opus 4.7 was 3× its real price) and extended; the client
+delegates retries to the SDK (no more retrying 400s) and surfaces
+truncation / refusals.
+
+### ✓ 21. Unit tests
+`tests/` (stdlib `unittest`, fake yt-dlp on PATH) + CI step. `make test`.
+
+### ✓ 22. MCP server
+`scripts/mcp_server.py` (stdio, or streamable HTTP on loopback behind a
+tunnel with a token in the path). Local work stays on the laptop; the
+connected Claude does Phases 2–4 itself from the same prompts, so no API
+key is needed. `save_distilled` rejects any `ts` that is not a marker in
+the transcript. README "MCP server". Verified live over stdio and HTTP
+against a real extracted playlist; not yet verified through a real tunnel
+or from claude.ai.
+
+### ✓ 23. `knowledge-diff` intent (the name on the repo)
+`scripts/knowledge_diff.py` + `prompts/06_knowledge_diff.md` + MCP tools
+`get_diff_candidates` / `save_knowledge_diff`. Each distilled item is
+judged new / partial / known against the knowledge store (other
+playlists, earlier videos of the same playlist, `knowledge/syllabus.md`)
+and the not-known ones become merged, deep-linked watch ranges in
+`watchlist.md`. Judges: word overlap (CLI, free) or the connected Claude
+(MCP). Verified live through the MCP server on two real videos. Not
+built: an API-model judge for the CLI (needs a key), and marking a
+video as "watched" independently of it being distilled.
+
+### ✓ 24. `claim-cards` intent (was planned as trading-only `strategy-claims`)
+Generic: `scripts/claim_cards.py`, `prompts/02_claim_cards.md`, MCP tools
+`list_card_profiles` / `get_card_instructions` / `save_claim_cards` /
+`get_claim_cards` / `save_card_translation`. What a card is for a subject
+comes from a profile under `profiles/` (`generic` is the default;
+`trading` adds strategy fields and a translation step into the
+option-backtesting DSL via `prompts/07_trading_translate.md`). Cards are
+grounded by a verbatim-quote check and the timestamp guard and clustered
+by subject + tag across creators; a translation's `manual_review` must
+name everything it could not express or had to choose. The generic
+profile was tried on a real non-trading video; the trading profile has
+not been run on a real trading video.
+
 ---
 
 ## Open (deferred from this batch)
+
+### Structured outputs for the JSON phases
+Phase 2 still parses free-text JSON and re-prompts on verbose keys. The
+Messages API's `output_config.format` would guarantee the compact schema
+in one call and delete the retry path. Needs a live key to verify.
+
+### Batch API for Phase 2
+Per-video distillation is not latency-sensitive and is embarrassingly
+parallel: the Message Batches API halves its cost. Resumability must then
+key on batch ids, not just on-disk JSON.
+
+### Hierarchical Phase 3
+One synthesis call caps at ~150 videos of compact JSON. Chunk + reduce
+for bigger channels.
 
 ### Whisper item 9 — speaker diarization
 Best done via WhisperX as a single bundle (forced-alignment + diarization).
