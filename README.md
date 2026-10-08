@@ -101,6 +101,7 @@ You tell the tool what you want before it starts. Options:
 | `style-clone`         | A Skill that mimics the creator's *phrasing*, not just method           | `SKILL.md`                       |
 | `knowledge-diff`      | Only the minutes of each video that are new to *you*                    | `watchlist.md`                   |
 | `claim-cards`         | The checkable claims in each video, as quoted, deep-linked cards        | `claim_cards.md`                 |
+| `qa`                  | Ask questions; get answers grounded in the playlist with citations      | cited answers (RAG index)        |
 
 Every output (except `stats`) also produces a separate `citations.md`
 file mapping each claim back to **the exact video and timestamp** it
@@ -706,6 +707,55 @@ knowdiff records it and cannot re-check it.
 
 ---
 
+## Ask questions about a playlist (RAG, intent=qa)
+
+Instead of distilling a whole playlist, you can index it once and then ask
+questions. Answers are **grounded in the transcripts** and cite the exact
+`[video_NN @ MM:SS]` they came from; when the playlist doesn't cover a
+question, the answer says so rather than inventing one.
+
+**1. Build the index** (local, free — chunks the timestamped transcripts and
+embeds them):
+
+```
+make index PLAYLIST_NAME=mycreator
+```
+
+Embeddings default to a local model (offline, $0). Pick a backend with
+`RAG_PROVIDER=` — `local` (default), `hash` (zero-dependency baseline for
+tests/offline smoke runs, not semantic), `voyage` or `openai` (hosted APIs;
+need `VOYAGE_API_KEY` / `OPENAI_API_KEY`). Set it per playlist in `scope.json`'s
+`embeddings` block, or override with `RAG_PROVIDER=` / `RAG_MODEL=`. The index
+records which embedder built it and refuses a query from a different one — you
+can't compare vectors across models.
+
+**2. Ask** (the answer step uses Claude; retrieval is free):
+
+```
+make ask PLAYLIST_NAME=mycreator Q="what does the creator say about risk?"
+```
+
+Inspect retrieval without paying for an answer (prints the matched excerpts and
+their citations, no Claude call):
+
+```
+make ask PLAYLIST_NAME=mycreator Q="..." ASK_FLAGS=--retrieve-only
+```
+
+**3. Measure quality** (optional). Scaffold a question set, then score answers
+on faithfulness, answer-relevance, and context-relevance (LLM-as-judge):
+
+```
+python scripts/rag_eval.py --playlist mycreator --sample   # writes qa_eval.jsonl
+make rag-eval PLAYLIST_NAME=mycreator                       # -> rag_score.json
+```
+
+For a code-level walkthrough of how indexing, retrieval, grounding, and the
+eval work — written for people new to Python/AI — see
+[`docs/LEARNING_WALKTHROUGH.md`](docs/LEARNING_WALKTHROUGH.md).
+
+---
+
 ## Rate limits
 
 YouTube throttles and blocks automated caption fetching, and it blocks
@@ -751,6 +801,9 @@ unchanged.
 
 - [`docs/PRD.md`](docs/PRD.md) — product requirements: every phase, every
   output, cost model, compliance notes. Start here if you want the full picture.
+- [`docs/LEARNING_WALKTHROUGH.md`](docs/LEARNING_WALKTHROUGH.md) — a teaching
+  walkthrough of the codebase for people new to Python/AI: RAG, embeddings,
+  evaluation, and the Python patterns used here, with interview prep.
 - `make test` — unit tests (no network, no API key; the extractor is tested
   against a fake yt-dlp).
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute.
